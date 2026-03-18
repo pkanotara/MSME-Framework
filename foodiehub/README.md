@@ -17,7 +17,7 @@ FoodieHub Onboarding Engine is a multi-tenant SaaS platform that semi-automates 
 
 3. **Post-signup automation**
    - Stores WABA + Phone Number IDs
-   - Registers webhook subscriptions via queue workers
+   - Registers webhook subscriptions using an in-process async job runner
    - Activates tenant chatbot config
    - Marks onboarding active
 
@@ -26,9 +26,9 @@ FoodieHub Onboarding Engine is a multi-tenant SaaS platform that semi-automates 
    - Restaurant Owner dashboard for tenant-only operations
 
 ## Stack
-- Backend: Node.js, Express, TypeScript, MongoDB, Redis, BullMQ, Axios, JWT, Zod, Cloudinary
+- Backend: Node.js, Express, TypeScript, MongoDB, Axios, JWT, Zod, Cloudinary
 - Frontend: Next.js App Router, TypeScript, Tailwind
-- Infra: Docker Compose
+- Async processing: in-memory job runner (no Redis required)
 
 ## Monorepo Structure
 
@@ -44,25 +44,29 @@ foodiehub/
 - Auth + RBAC
 - Onboarding chat workflow
 - Meta Embedded Signup integration
-- Meta webhook ingestion + processing queues
+- Meta webhook ingestion + async job processing
 - Restaurant, menu, order, analytics, upload APIs
 - Admin monitoring APIs
 
-## Setup
+## Local Setup (No Docker, No Redis)
 
-### 1) Environment
+### 1) Prerequisites
+- Node.js 20+
+- MongoDB running locally on `127.0.0.1:27017`
+
+### 2) Environment
 ```bash
 cd backend
 cp .env.example .env
 ```
 
-### 2) Install dependencies
+### 3) Install dependencies
 ```bash
 cd backend && npm install
 cd ../frontend && npm install
 ```
 
-### 3) Run locally
+### 4) Run locally
 ```bash
 # terminal 1
 cd backend
@@ -73,10 +77,10 @@ cd frontend
 npm run dev
 ```
 
-### 4) Run with Docker
+### 5) Optional seed data
 ```bash
-cd ..
-docker compose up --build
+cd backend
+npm run seed
 ```
 
 ## Core API Surface
@@ -117,5 +121,5 @@ docker compose up --build
 ## Compliance Notes
 - FoodieHub does **not** bypass Meta requirements.
 - WhatsApp Business account creation cannot be done invisibly by backend automation.
-- Owner interaction is mandatory for login/consent/phone verification in Embedded Signup.
+- Owner interaction is mandatory for login, consent, and phone verification in Embedded Signup.
 - Automation is applied only to allowed post-signup API steps.

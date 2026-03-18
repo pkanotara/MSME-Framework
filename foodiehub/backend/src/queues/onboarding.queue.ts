@@ -1,4 +1,8 @@
-import { Queue } from 'bullmq';
-import { queueConnection } from './connection';
+import { InMemoryQueue } from './base.queue';
 
-export const onboardingQueue = new Queue('onboarding-setup', { connection: queueConnection });
+export interface OnboardingSetupJobPayload {
+  wabaId: string;
+  accessToken: string;
+}
+
+export const onboardingQueue = new InMemoryQueue<OnboardingSetupJobPayload>('onboarding-setup');

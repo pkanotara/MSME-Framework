@@ -1,4 +1,7 @@
-import { Queue } from 'bullmq';
-import { queueConnection } from './connection';
+import { InMemoryQueue } from './base.queue';
 
-export const webhookQueue = new Queue('webhook-processing', { connection: queueConnection });
+export interface WebhookProcessingJobPayload {
+  logId: string;
+}
+
+export const webhookQueue = new InMemoryQueue<WebhookProcessingJobPayload>('webhook-processing');

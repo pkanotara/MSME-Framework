@@ -7,11 +7,6 @@ services:
     volumes:
       - mongo_data:/data/db
 
-  redis:
-    image: redis:7
-    ports:
-      - '6379:6379'
-
   backend:
     build: ./backend
     env_file:
@@ -20,7 +15,6 @@ services:
       - '5000:5000'
     depends_on:
       - mongo
-      - redis
 
   frontend:
     build: ./frontend

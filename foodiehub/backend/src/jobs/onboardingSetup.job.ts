@@ -1,14 +1,8 @@
-import { Worker } from 'bullmq';
-import { queueConnection } from '../queues/connection';
+import { onboardingQueue } from '../queues/onboarding.queue';
 import { MetaSetupService } from '../services/MetaSetupService';
 
 const metaSetupService = new MetaSetupService();
 
-export const onboardingSetupWorker = new Worker(
-  'onboarding-setup',
-  async (job) => {
-    const { wabaId, accessToken } = job.data as { wabaId: string; accessToken: string };
-    await metaSetupService.subscribeWebhook(wabaId, accessToken);
-  },
-  { connection: queueConnection }
-);
+onboardingQueue.registerHandler(async ({ wabaId, accessToken }) => {
+  await metaSetupService.subscribeWebhook(wabaId, accessToken);
+});
