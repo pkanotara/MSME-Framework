@@ -14,10 +14,11 @@ router.get('/callback', async (req, res) => {
   const { code, state, error, error_reason, error_description } = req.query;
 
   logger.info('Embedded Signup callback received');
+  logger.info(`code=${code ? 'present' : 'missing'}, state=${state}, error=${error}`);
 
   if (error) {
-    logger.error(`Meta OAuth error: ${error} - ${error_description}`);
     const reason = error_description || error_reason || error;
+    logger.error(`Meta OAuth error: ${reason}`);
     return res.redirect(
       `${process.env.FRONTEND_URL}/onboard/error?reason=${encodeURIComponent(reason)}`
     );
@@ -49,23 +50,38 @@ router.get('/link/:restaurantId', async (req, res, next) => {
     const restaurant = await Restaurant.findById(req.params.restaurantId);
     if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
 
-    const stateParam = Buffer.from(req.params.restaurantId).toString('base64');
-    const params = new URLSearchParams({
-      client_id: process.env.META_APP_ID,
-      redirect_uri: process.env.EMBEDDED_SIGNUP_REDIRECT_URI,
-      scope: 'whatsapp_business_management,whatsapp_business_messaging,business_management',
-      response_type: 'code',
-      state: stateParam,
-      config_id: process.env.META_CONFIG_ID,
-    });
+    // Debug log to verify correct values
+    console.log('=== Generating Embedded Signup URL ===');
+    console.log('META_APP_ID:', process.env.META_APP_ID);
+    console.log('META_CONFIG_ID:', process.env.META_CONFIG_ID);
+    console.log('REDIRECT_URI:', process.env.EMBEDDED_SIGNUP_REDIRECT_URI);
+    console.log('======================================');
 
-    const signupUrl = `https://www.facebook.com/dialog/oauth?${params.toString()}`;
+    const stateParam = Buffer.from(req.params.restaurantId).toString('base64');
+
+    // IMPORTANT: client_id MUST be META_APP_ID (768041869261097)
+    // NOT MAIN_WABA_ID (1829228161089972)
+    const signupUrl =
+      `https://www.facebook.com/dialog/oauth` +
+      `?client_id=${process.env.META_APP_ID}` +
+      `&redirect_uri=${encodeURIComponent(process.env.EMBEDDED_SIGNUP_REDIRECT_URI)}` +
+      `&scope=whatsapp_business_management,whatsapp_business_messaging,business_management` +
+      `&response_type=code` +
+      `&state=${stateParam}` +
+      `&config_id=${process.env.META_CONFIG_ID}`;
+
+    console.log('Generated URL (first 100):', signupUrl.substring(0, 100));
 
     res.json({
       signupUrl,
       restaurantId: req.params.restaurantId,
       restaurantName: restaurant.name,
       targetBusinessNumber: restaurant.phone,
+      // Debug info
+      _debug: {
+        appId: process.env.META_APP_ID,
+        configId: process.env.META_CONFIG_ID,
+      }
     });
   } catch (err) { next(err); }
 });
@@ -122,8 +138,7 @@ router.post('/manual-activate/:restaurantId', authenticate, requireAdmin, async 
 
 /**
  * GET /api/embedded-signup/test-update/:restaurantId
- * TEST ONLY - Trigger profile update and see before/after
- * Usage: http://localhost:5000/api/embedded-signup/test-update/RESTAURANT_ID
+ * TEST - Trigger profile update and see before/after
  */
 router.get('/test-update/:restaurantId', async (req, res) => {
   try {
@@ -141,26 +156,18 @@ router.get('/test-update/:restaurantId', async (req, res) => {
     const accessToken = waConfig?.accessToken || process.env.MAIN_ACCESS_TOKEN;
 
     logger.info(`Test profile update for: ${restaurant.name}`);
-    logger.info(`Phone Number ID: ${phoneNumberId}`);
 
-    // Get BEFORE
     let before = null;
     try {
       before = await getWhatsAppBusinessProfile(phoneNumberId, accessToken);
-    } catch (e) {
-      before = { error: e.response?.data || e.message };
-    }
+    } catch (e) { before = { error: e.response?.data || e.message }; }
 
-    // Update profile
     const results = await setupFullBusinessProfile(restaurant, phoneNumberId, accessToken);
 
-    // Get AFTER
     let after = null;
     try {
       after = await getWhatsAppBusinessProfile(phoneNumberId, accessToken);
-    } catch (e) {
-      after = { error: e.response?.data || e.message };
-    }
+    } catch (e) { after = { error: e.response?.data || e.message }; }
 
     res.json({
       restaurant: {
@@ -169,9 +176,7 @@ router.get('/test-update/:restaurantId', async (req, res) => {
         description: restaurant.description,
         address: restaurant.address,
         email: restaurant.email,
-        categories: restaurant.foodCategories,
         hasLogo: !!restaurant.logoUrl,
-        logoUrl: restaurant.logoUrl,
       },
       phoneNumberId,
       usingMainToken: !waConfig?.accessToken,
@@ -183,7 +188,6 @@ router.get('/test-update/:restaurantId', async (req, res) => {
     res.status(500).json({
       error: err.message,
       details: err.response?.data,
-      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
     });
   }
 });

@@ -95,7 +95,7 @@ const handleOnboardingMessage = async (
     await newSession.save();
     await sendWelcome(senderNumber);
   } catch (err) {
-    logger.error("handleOnboardingMessage error:", err.message, err.stack);
+    logger.error("handleOnboardingMessage error:", err.response?.data || err.message, err.stack);
     await sendFromMainBot(
       senderNumber,
       `⚠️ Error: ${err.message}\n\nType *RESTART* to start over.`,
@@ -114,7 +114,7 @@ const showReturningUserMenu = async (senderNumber, completedSessions) => {
     senderNumber,
     `👋 *Welcome back!*\n\nYour registered restaurants:\n${bizList}\n\nWhat would you like to do?`,
     [
-      { id: "add_new_business", title: "➕ Add New Restaurant" },
+      { id: "add_new_business", title: "➕ Add Restaurant" },
       { id: "go_to_dashboard", title: "📊 Go to Dashboard" },
     ],
   );
@@ -412,7 +412,22 @@ const processStep = async (session, text, messageType, mediaUrl) => {
 
       case "logo": {
         if (messageType === "image" && mediaUrl) {
-          session.data.logoUrl = mediaUrl;
+          // mediaUrl is actually a Media ID — download and upload to Cloudinary
+          try {
+            const { downloadAndUploadMedia } = require("./whatsappService");
+            const cloudinaryUrl = await downloadAndUploadMedia(
+              mediaUrl,
+              process.env.MAIN_ACCESS_TOKEN,
+            );
+            session.data.logoUrl = cloudinaryUrl;
+            await sendFromMainBot(
+              senderNumber,
+              `✅ Logo uploaded successfully!`,
+            );
+          } catch (err) {
+            logger.warn("Logo upload failed:", err.message);
+            // Continue without logo
+          }
         }
         await finalizeOnboarding(session);
         break;
@@ -486,7 +501,10 @@ const finalizeOnboarding = async (session) => {
     // 3. Link restaurant to owner
     if (!owner.restaurant) {
       owner.restaurant = restaurant._id;
-      await RestaurantOwner.updateOne({ _id: owner._id }, { restaurant: restaurant._id });
+      await RestaurantOwner.updateOne(
+        { _id: owner._id },
+        { restaurant: restaurant._id },
+      );
     }
 
     // 4. Create WhatsApp config
@@ -560,7 +578,11 @@ const finalizeOnboarding = async (session) => {
       );
     }
   } catch (err) {
-    logger.error("finalizeOnboarding error:", err.response?.data || err.message, err.stack);
+    logger.error(
+      "finalizeOnboarding error:",
+      err.response?.data || err.message,
+      err.stack,
+    );
     await sendFromMainBot(
       senderNumber,
       `⚠️ Error during setup. Our team has been notified.\n\nType *RESTART* to try again.`,

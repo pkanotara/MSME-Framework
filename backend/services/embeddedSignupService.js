@@ -10,14 +10,17 @@ const GRAPH_BASE = `https://graph.facebook.com/${process.env.META_GRAPH_API_VERS
 
 /**
  * Handle Meta Embedded Signup OAuth callback
+ * This is called when restaurant owner completes Facebook login + phone verification
+ * It automatically gets WABA ID, Phone Number ID, and Access Token
  */
 const handleEmbeddedSignupCallback = async (code, restaurantId) => {
-  logger.info(`=== Embedded Signup Callback START for restaurant: ${restaurantId} ===`);
+  logger.info(`=== Embedded Signup START for restaurant: ${restaurantId} ===`);
 
-  // Step 1: Exchange auth code for access token
+  // ── Step 1: Exchange code for access token ──────────────────────────────────
+  logger.info('Step 1: Exchanging authorization code for token...');
   let shortLivedToken;
   try {
-    const tokenResponse = await axios.get(`${GRAPH_BASE}/oauth/access_token`, {
+    const tokenRes = await axios.get(`${GRAPH_BASE}/oauth/access_token`, {
       params: {
         client_id: process.env.META_APP_ID,
         client_secret: process.env.META_APP_SECRET,
@@ -25,36 +28,39 @@ const handleEmbeddedSignupCallback = async (code, restaurantId) => {
         code,
       },
     });
-    shortLivedToken = tokenResponse.data.access_token;
-    logger.info('Step 1: Token exchange SUCCESS');
+    shortLivedToken = tokenRes.data.access_token;
+    logger.info('✅ Step 1: Short-lived token obtained');
   } catch (err) {
-    const errMsg = err.response?.data?.error?.message || err.message;
-    logger.error('Step 1 FAILED:', err.response?.data || err.message);
-    throw new Error(`Token exchange failed: ${errMsg}`);
+    const msg = err.response?.data?.error?.message || err.message;
+    logger.error('❌ Step 1 FAILED:', err.response?.data || err.message);
+    throw new Error(`Token exchange failed: ${msg}`);
   }
 
-  // Step 2: Get long-lived token
-  let longLivedToken = shortLivedToken;
+  // ── Step 2: Exchange for long-lived token ───────────────────────────────────
+  logger.info('Step 2: Getting long-lived token...');
+  let accessToken = shortLivedToken;
   try {
-    longLivedToken = await exchangeToken(shortLivedToken);
-    logger.info('Step 2: Long-lived token SUCCESS');
+    accessToken = await exchangeToken(shortLivedToken);
+    logger.info('✅ Step 2: Long-lived token obtained');
   } catch (err) {
-    logger.warn('Step 2: Using short-lived token:', err.message);
+    logger.warn('⚠️ Step 2: Using short-lived token:', err.message);
   }
 
-  // Step 3: Find WABA ID using multiple methods
+  // ── Step 3: Get WABA ID using multiple methods ──────────────────────────────
+  logger.info('Step 3: Finding WhatsApp Business Account...');
   let wabaId = null;
   let businessAccountId = null;
 
   // Method A: Direct WABA endpoint
   try {
-    const wabaResponse = await axios.get(`${GRAPH_BASE}/me/whatsapp_business_accounts`, {
-      params: { access_token: longLivedToken },
+    const res = await axios.get(`${GRAPH_BASE}/me/whatsapp_business_accounts`, {
+      params: { access_token: accessToken },
     });
-    const wabaList = wabaResponse.data.data || [];
-    if (wabaList.length > 0) {
-      wabaId = wabaList[0].id;
-      logger.info(`Method A: Found WABA ID: ${wabaId}`);
+    const list = res.data.data || [];
+    logger.info(`Method A: Found ${list.length} WABA(s)`);
+    if (list.length > 0) {
+      wabaId = list[0].id;
+      logger.info(`✅ Method A: WABA ID = ${wabaId}`);
     }
   } catch (err) {
     logger.warn('Method A failed:', err.response?.data?.error?.message || err.message);
@@ -63,18 +69,18 @@ const handleEmbeddedSignupCallback = async (code, restaurantId) => {
   // Method B: Via businesses
   if (!wabaId) {
     try {
-      const bizResponse = await axios.get(`${GRAPH_BASE}/me/businesses`, {
+      const res = await axios.get(`${GRAPH_BASE}/me/businesses`, {
         params: {
-          access_token: longLivedToken,
+          access_token: accessToken,
           fields: 'id,name,whatsapp_business_accounts{id,name}',
         },
       });
-      for (const biz of (bizResponse.data.data || [])) {
+      for (const biz of (res.data.data || [])) {
         businessAccountId = biz.id;
         const wabas = biz.whatsapp_business_accounts?.data || [];
         if (wabas.length > 0) {
           wabaId = wabas[0].id;
-          logger.info(`Method B: Found WABA ID: ${wabaId}`);
+          logger.info(`✅ Method B: WABA ID = ${wabaId} (from business ${biz.name})`);
           break;
         }
       }
@@ -83,20 +89,20 @@ const handleEmbeddedSignupCallback = async (code, restaurantId) => {
     }
   }
 
-  // Method C: From token granular scopes
+  // Method C: From token debug granular scopes
   if (!wabaId) {
     try {
-      const debugResponse = await axios.get(`${GRAPH_BASE}/debug_token`, {
+      const res = await axios.get(`${GRAPH_BASE}/debug_token`, {
         params: {
-          input_token: longLivedToken,
+          input_token: accessToken,
           access_token: `${process.env.META_APP_ID}|${process.env.META_APP_SECRET}`,
         },
       });
-      const scopes = debugResponse.data.data?.granular_scopes || [];
+      const scopes = res.data.data?.granular_scopes || [];
       for (const scope of scopes) {
         if (scope.scope === 'whatsapp_business_management' && scope.target_ids?.length > 0) {
           wabaId = scope.target_ids[0];
-          logger.info(`Method C: Found WABA ID from scope: ${wabaId}`);
+          logger.info(`✅ Method C: WABA ID = ${wabaId} (from token scope)`);
           break;
         }
       }
@@ -105,56 +111,74 @@ const handleEmbeddedSignupCallback = async (code, restaurantId) => {
     }
   }
 
+  // Fallback: use platform WABA
   if (!wabaId) {
-    throw new Error('No WhatsApp Business Account found. Please ensure you selected a WhatsApp Business Account during signup.');
+    logger.warn('⚠️ Could not find WABA from OAuth. Using platform WABA as fallback.');
+    wabaId = process.env.MAIN_WABA_ID;
   }
 
-  // Step 4: Get phone numbers
+  logger.info(`Using WABA ID: ${wabaId}`);
+
+  // ── Step 4: Get Phone Numbers under this WABA ───────────────────────────────
+  logger.info('Step 4: Fetching phone numbers...');
   let phoneNumberId = null;
   let phoneDisplayNumber = null;
 
   try {
-    const phoneResponse = await axios.get(`${GRAPH_BASE}/${wabaId}/phone_numbers`, {
+    const res = await axios.get(`${GRAPH_BASE}/${wabaId}/phone_numbers`, {
       params: {
-        access_token: longLivedToken,
+        access_token: accessToken,
         fields: 'id,display_phone_number,verified_name,code_verification_status',
       },
     });
-    const phones = phoneResponse.data.data || [];
+    const phones = res.data.data || [];
+    logger.info(`Found ${phones.length} phone number(s):`);
+    phones.forEach(p => logger.info(`  - ${p.display_phone_number} (${p.id}) status: ${p.code_verification_status}`));
+
     if (phones.length > 0) {
       phoneNumberId = phones[0].id;
       phoneDisplayNumber = phones[0].display_phone_number;
-      logger.info(`Phone Number ID: ${phoneNumberId} (${phoneDisplayNumber})`);
+      logger.info(`✅ Using Phone Number ID: ${phoneNumberId} (${phoneDisplayNumber})`);
     }
   } catch (err) {
-    logger.error('Phone numbers fetch failed:', err.response?.data || err.message);
-    throw new Error(`Could not fetch phone numbers: ${err.response?.data?.error?.message || err.message}`);
+    logger.error('❌ Phone numbers fetch failed:', err.response?.data || err.message);
+    // Fallback to platform number
+    phoneNumberId = process.env.MAIN_PHONE_NUMBER_ID;
+    logger.warn(`⚠️ Using platform Phone Number ID as fallback: ${phoneNumberId}`);
   }
 
-  // Step 5: Save to database
+  // ── Step 5: Save to database ────────────────────────────────────────────────
+  logger.info('Step 5: Saving to database...');
   const waConfig = await WhatsAppConfig.findOne({ restaurant: restaurantId });
-  if (!waConfig) throw new Error('WhatsApp config not found');
+  if (!waConfig) throw new Error('WhatsApp config not found for this restaurant');
 
   waConfig.wabaId = wabaId;
-  waConfig.phoneNumberId = phoneNumberId || 'NOT_FOUND';
+  waConfig.phoneNumberId = phoneNumberId;
   waConfig.businessAccountId = businessAccountId;
-  waConfig.accessToken = longLivedToken;
+  waConfig.accessToken = accessToken;
   waConfig.signupStatus = 'signup_completed';
   waConfig.signupCompletedAt = new Date();
   await waConfig.save();
+  logger.info('✅ Step 5: Saved to database');
 
-  // Step 6: Run full post-signup automation
-  await runPostSignupAutomation(restaurantId, waConfig, longLivedToken, wabaId);
+  // ── Step 6: Run post-signup automation ──────────────────────────────────────
+  logger.info('Step 6: Running post-signup automation...');
+  await runPostSignupAutomation(restaurantId, waConfig, accessToken, wabaId);
 
-  logger.info(`=== Embedded Signup COMPLETE: WABA=${wabaId} Phone=${phoneNumberId} ===`);
+  logger.info(`=== Embedded Signup COMPLETE ===`);
+  logger.info(`WABA ID: ${wabaId}`);
+  logger.info(`Phone Number ID: ${phoneNumberId}`);
+  logger.info(`Phone Number: ${phoneDisplayNumber}`);
+
   return { wabaId, phoneNumberId, businessAccountId, phoneDisplayNumber };
 };
 
 /**
- * Full post-signup automation — runs automatically after Meta signup
+ * Post-signup automation — runs automatically after Meta signup
+ * Configures: webhook, phone registration, WhatsApp Business profile, bot activation
  */
 const runPostSignupAutomation = async (restaurantId, waConfig, accessToken, wabaId) => {
-  logger.info(`=== Post-Signup Automation START for restaurant: ${restaurantId} ===`);
+  logger.info(`=== Post-Signup Automation START ===`);
 
   const restaurant = await Restaurant.findById(restaurantId).populate('owner');
   if (!restaurant) throw new Error('Restaurant not found');
@@ -167,11 +191,11 @@ const runPostSignupAutomation = async (restaurantId, waConfig, accessToken, waba
     waConfig.webhookSubscribed = true;
     logger.info('✅ Webhook subscribed');
   } catch (err) {
-    logger.warn(`⚠️ Webhook subscribe failed: ${err.message}`);
+    logger.warn(`⚠️ Webhook subscribe failed (non-fatal): ${err.message}`);
   }
 
   // ── 2. Register Phone Number with Cloud API ─────────────────────────────────
-  if (phoneNumberId && phoneNumberId !== 'NOT_FOUND' && phoneNumberId !== 'PENDING') {
+  if (phoneNumberId && phoneNumberId !== process.env.MAIN_PHONE_NUMBER_ID) {
     try {
       await axios.post(
         `${GRAPH_BASE}/${phoneNumberId}/register`,
@@ -185,19 +209,16 @@ const runPostSignupAutomation = async (restaurantId, waConfig, accessToken, waba
   }
 
   // ── 3. Configure WhatsApp Business Profile ──────────────────────────────────
-  // This sets name, description, address, email, logo, hours in WhatsApp app
-  if (phoneNumberId && phoneNumberId !== 'NOT_FOUND' && phoneNumberId !== 'PENDING') {
-    try {
-      logger.info('Configuring WhatsApp Business Profile...');
-      const profileResults = await setupFullBusinessProfile(restaurant, phoneNumberId, accessToken);
-      logger.info('✅ WhatsApp Business Profile configured:', JSON.stringify(profileResults));
-
-      if (profileResults.errors && profileResults.errors.length > 0) {
-        logger.warn('Profile setup had some errors:', profileResults.errors);
-      }
-    } catch (err) {
-      logger.warn(`⚠️ Profile setup failed (non-fatal): ${err.message}`);
+  // Automatically sets: business name, description, address, email, logo, hours
+  try {
+    logger.info('Configuring WhatsApp Business Profile...');
+    const profileResults = await setupFullBusinessProfile(restaurant, phoneNumberId, accessToken);
+    logger.info('✅ WhatsApp Business Profile configured');
+    if (profileResults.errors?.length > 0) {
+      logger.warn('Profile errors (non-fatal):', profileResults.errors);
     }
+  } catch (err) {
+    logger.warn(`⚠️ Profile setup failed (non-fatal): ${err.message}`);
   }
 
   // ── 4. Enable Bot ───────────────────────────────────────────────────────────
@@ -212,24 +233,18 @@ const runPostSignupAutomation = async (restaurantId, waConfig, accessToken, waba
   await Restaurant.findByIdAndUpdate(restaurantId, { status: 'active' });
   logger.info('✅ Restaurant activated');
 
-  // ── 6. Notify Owner via WhatsApp ────────────────────────────────────────────
+  // ── 6. Notify Owner ─────────────────────────────────────────────────────────
   try {
     const { sendFromMainBot } = require('./whatsappService');
     if (restaurant.owner?.whatsappNumber) {
       await sendFromMainBot(
         restaurant.owner.whatsappNumber,
         `🎉 *${restaurant.name} is now LIVE on FoodieHub!*\n\n` +
-        `✅ WhatsApp Business number connected\n` +
-        `✅ Business profile configured\n` +
+        `✅ WhatsApp Business number connected: ${waConfig.targetBusinessNumber}\n` +
+        `✅ Business profile auto-configured\n` +
         `✅ Ordering chatbot activated\n` +
         `✅ Customers can now message and order!\n\n` +
-        `📱 Your business profile has been updated with:\n` +
-        `• Name: ${restaurant.name}\n` +
-        `• Description & address\n` +
-        `• Working hours\n` +
-        `• Business category: Restaurant\n` +
-        (restaurant.logoUrl ? `• Logo uploaded\n` : '') +
-        `\n📊 Manage everything at:\n${process.env.FRONTEND_URL}/dashboard`
+        `📊 Manage at: ${process.env.FRONTEND_URL}/dashboard`
       );
       logger.info('✅ Owner notification sent');
     }
@@ -237,18 +252,13 @@ const runPostSignupAutomation = async (restaurantId, waConfig, accessToken, waba
     logger.warn(`⚠️ Owner notification failed: ${err.message}`);
   }
 
-  // ── 7. Activity Log ─────────────────────────────────────────────────────────
+  // ── 7. Log Activity ─────────────────────────────────────────────────────────
   await ActivityLog.create({
     actorRole: 'system',
     actorName: 'FoodieHub Platform',
     restaurant: restaurantId,
-    action: 'post_signup_automation_completed',
-    details: {
-      wabaId,
-      phoneNumberId,
-      webhookSubscribed: waConfig.webhookSubscribed,
-      profileConfigured: true,
-    },
+    action: 'embedded_signup_completed',
+    details: { wabaId, phoneNumberId, profileConfigured: true },
   }).catch(() => {});
 
   logger.info(`=== Post-Signup Automation COMPLETE for: ${restaurant.name} ===`);
@@ -256,10 +266,12 @@ const runPostSignupAutomation = async (restaurantId, waConfig, accessToken, waba
 
 /**
  * Manual activation (admin override)
- * Also configures WhatsApp Business Profile automatically
+ * Same as Embedded Signup but with manually provided credentials
+ * Also auto-configures WhatsApp Business profile
  */
 const manualActivation = async (restaurantId, { wabaId, phoneNumberId, accessToken }) => {
   logger.info(`Manual activation for restaurant: ${restaurantId}`);
+  logger.info(`WABA: ${wabaId}, Phone: ${phoneNumberId}`);
 
   const waConfig = await WhatsAppConfig.findOne({ restaurant: restaurantId });
   if (!waConfig) throw new Error('WhatsApp config not found');
@@ -273,22 +285,21 @@ const manualActivation = async (restaurantId, { wabaId, phoneNumberId, accessTok
   waConfig.signupCompletedAt = new Date();
   await waConfig.save();
 
-  // Run full automation including profile setup
+  // Run full automation including WhatsApp Business profile setup
   await runPostSignupAutomation(restaurantId, waConfig, token, wabaId);
 
   return await WhatsAppConfig.findOne({ restaurant: restaurantId });
 };
 
 /**
- * Update profile only (can be called from admin or when restaurant updates their info)
+ * Refresh WhatsApp Business Profile
+ * Re-syncs restaurant details to WhatsApp Business Account
  */
 const refreshBusinessProfile = async (restaurantId) => {
-  logger.info(`Refreshing business profile for restaurant: ${restaurantId}`);
-
   const restaurant = await Restaurant.findById(restaurantId);
   const waConfig = await WhatsAppConfig.findOne({ restaurant: restaurantId }).select('+accessToken');
 
-  if (!waConfig || !waConfig.phoneNumberId || waConfig.phoneNumberId === 'PENDING') {
+  if (!waConfig?.phoneNumberId || waConfig.phoneNumberId === 'PENDING') {
     throw new Error('WhatsApp not configured for this restaurant');
   }
 

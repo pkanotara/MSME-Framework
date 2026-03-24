@@ -9,9 +9,10 @@ const logger = winston.createLogger({
       ? winston.format.json()
       : winston.format.combine(
           winston.format.colorize(),
-          winston.format.printf(({ level, message, timestamp, stack }) =>
-            `${timestamp} ${level}: ${stack || message}`
-          )
+          winston.format.printf(({ level, message, timestamp, stack, ...rest }) => {
+            const extra = Object.keys(rest).length ? ' ' + JSON.stringify(rest) : '';
+            return `${timestamp} ${level}: ${stack || message}${extra}`;
+          })
         )
   ),
   transports: [

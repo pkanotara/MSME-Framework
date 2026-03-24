@@ -29,7 +29,8 @@ const sendTextMessage = async (phoneNumberId, accessToken, to, text) => {
     );
     return response.data;
   } catch (err) {
-    logger.error(`WhatsApp send error to ${to}:`, err.response?.data || err.message);
+    const detail = err.response?.data ?? err.message ?? String(err);
+    console.error(`WhatsApp send error to ${to}:`, JSON.stringify(detail));
     throw err;
   }
 };
@@ -92,7 +93,8 @@ const sendButtonMessage = async (phoneNumberId, accessToken, to, bodyText, butto
     );
     return response.data;
   } catch (err) {
-    logger.error(`WhatsApp button message error:`, err.response?.data || err.message);
+    const detail = err.response?.data ?? err.message ?? String(err);
+    console.error(`WhatsApp button message error:`, JSON.stringify(detail));
     throw err;
   }
 };
@@ -175,6 +177,45 @@ const sendButtonFromMainBot = (to, bodyText, buttons) => {
   );
 };
 
+
+
+/**
+ * Download media from WhatsApp and upload to Cloudinary
+ * WhatsApp sends mediaId, not URL — need to fetch the actual file
+ */
+const downloadAndUploadMedia = async (mediaId, accessToken) => {
+  const axios = require('axios');
+  const cloudinary = require('../config/cloudinary');
+
+  // Step 1: Get media URL from Meta
+  const mediaResponse = await axios.get(
+    `https://graph.facebook.com/${process.env.META_GRAPH_API_VERSION || 'v19.0'}/${mediaId}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const mediaUrl = mediaResponse.data.url;
+
+  // Step 2: Download the actual image
+  const imageResponse = await axios.get(mediaUrl, {
+    responseType: 'arraybuffer',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  const imageBuffer = Buffer.from(imageResponse.data);
+  const contentType = imageResponse.headers['content-type'] || 'image/jpeg';
+
+  // Step 3: Upload to Cloudinary
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader.upload_stream(
+      { folder: 'foodiehub/logos', resource_type: 'image' },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result.secure_url);
+      }
+    ).end(imageBuffer);
+  });
+};
+
+
 module.exports = {
   sendTextMessage,
   sendListMessage,
@@ -184,4 +225,5 @@ module.exports = {
   exchangeToken,
   sendFromMainBot,
   sendButtonFromMainBot,
+  downloadAndUploadMedia,  // ← ADD THIS
 };
