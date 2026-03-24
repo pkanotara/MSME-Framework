@@ -1,4 +1,4 @@
-# FoodieHub Onboarding Engine
+ChatServe — WhatsApp-Based Restaurant Automation Platform
 
 A production-ready multi-tenant WhatsApp Business onboarding platform for restaurant owners. Restaurant owners message your main WhatsApp bot, provide their business details, complete Meta Embedded Signup, and the system auto-configures their WhatsApp chatbot.
 
