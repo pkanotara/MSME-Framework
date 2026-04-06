@@ -136,6 +136,23 @@ const subscribeWebhook = async (wabaId, accessToken) => {
 };
 
 /**
+ * Refresh a long-lived token using fb_exchange_token grant.
+ * Works as long as the token hasn't been expired for more than 90 days.
+ * For permanent tokens, use a System User token from Meta Business Manager instead.
+ */
+const refreshAccessToken = async (expiredToken) => {
+  const response = await axios.get(`${GRAPH_BASE}/oauth/access_token`, {
+    params: {
+      grant_type: 'fb_exchange_token',
+      client_id: process.env.META_APP_ID,
+      client_secret: process.env.META_APP_SECRET,
+      fb_exchange_token: expiredToken,
+    },
+  });
+  return response.data.access_token;
+};
+
+/**
  * Exchange short-lived token for long-lived token
  */
 const exchangeToken = async (shortLivedToken) => {
@@ -206,7 +223,7 @@ const downloadAndUploadMedia = async (mediaId, accessToken) => {
   // Step 3: Upload to Cloudinary
   return new Promise((resolve, reject) => {
     cloudinary.uploader.upload_stream(
-      { folder: 'foodiehub/logos', resource_type: 'image' },
+      { folder: 'ChatServe/logos', resource_type: 'image' },
       (error, result) => {
         if (error) reject(error);
         else resolve(result.secure_url);
@@ -223,7 +240,8 @@ module.exports = {
   markAsRead,
   subscribeWebhook,
   exchangeToken,
+  refreshAccessToken,
   sendFromMainBot,
   sendButtonFromMainBot,
-  downloadAndUploadMedia,  // ← ADD THIS
+  downloadAndUploadMedia,
 };

@@ -10,12 +10,18 @@ const whatsappConfigSchema = new mongoose.Schema({
   phoneNumberId: String,     // Phone Number ID (used in API calls)
   businessAccountId: String, // Meta Business Account ID
   accessToken: { type: String, select: false }, // Long-lived token
+  // Signup mode
+  signupMode: { type: String, enum: ['cloud_api', 'coexistence'], default: 'cloud_api' },
+  metaSessionEvent: String,      // Raw session event from Meta (e.g. FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING)
+  selectedWabaId: String,        // Exact WABA ID resolved from session
+  selectedPhoneNumberId: String, // Exact Phone Number ID resolved from session
   // Webhook
   webhookSubscribed: { type: Boolean, default: false },
+  coexistenceSyncStartedAt: Date, // Must start within 24h for coexistence
   // Status
   signupStatus: {
     type: String,
-    enum: ['pending', 'signup_started', 'signup_completed', 'configured', 'failed'],
+    enum: ['pending', 'signup_started', 'oauth_completed', 'assets_resolved', 'configured', 'failed'],
     default: 'pending',
   },
   signupCompletedAt: Date,
@@ -25,6 +31,10 @@ const whatsappConfigSchema = new mongoose.Schema({
   botInitializedAt: Date,
   // Error tracking
   lastError: String,
+  lastSetupError: String,
+  lastSetupStep: String,
+  lastMetaErrorCode: String,
+  retryCount: { type: Number, default: 0 },
   errorAt: Date,
 }, { timestamps: true });
 

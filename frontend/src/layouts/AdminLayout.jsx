@@ -32,7 +32,7 @@ export default function AdminLayout() {
             <ChefHat size={20} className="text-white" />
           </div>
           <div>
-            <p className="font-semibold text-zinc-900 text-sm leading-tight">FoodieHub</p>
+            <p className="font-semibold text-zinc-900 text-sm leading-tight">ChatServe</p>
             <p className="text-zinc-400 text-xs">Admin Console</p>
           </div>
         </div>

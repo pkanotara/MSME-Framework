@@ -22,6 +22,7 @@ const orderRoutes = require('./routes/order');
 const analyticsRoutes = require('./routes/analytics');
 const uploadRoutes = require('./routes/upload');
 
+
 const app = express();
 
 
@@ -79,7 +80,7 @@ async function start() {
   await connectDB();
   await initRedis();
   app.listen(PORT, () => {
-    logger.info(`FoodieHub backend running on port ${PORT} [${process.env.NODE_ENV}]`);
+    logger.info(`ChatServe backend running on port ${PORT} [${process.env.NODE_ENV}]`);
   });
 }
 

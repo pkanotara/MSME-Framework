@@ -50,7 +50,7 @@ export default function LoginPage() {
                 </div>
                 <div>
                   <h1 className="text-[2.05rem] font-semibold leading-none tracking-tight text-white">
-                    FoodieHub
+                    ChatServe
                   </h1>
                   <p className="mt-1 text-sm text-white/70">WhatsApp Restaurant Platform</p>
                 </div>
@@ -104,7 +104,7 @@ export default function LoginPage() {
               <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-500 to-orange-600 shadow-[0_18px_50px_rgba(249,115,22,0.35)]">
                 <ChefHat size={28} className="text-white" />
               </div>
-              <h1 className="text-2xl font-bold tracking-tight text-white">FoodieHub</h1>
+              <h1 className="text-2xl font-bold tracking-tight text-white">ChatServe</h1>
               <p className="mt-1 text-sm text-white/70">WhatsApp Restaurant Platform</p>
             </div>
 
@@ -229,7 +229,7 @@ export default function LoginPage() {
                     <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
                       <p className="text-xs font-semibold text-white">Platform Admin</p>
                       <p className="mt-2 text-xs leading-6 text-white/70">
-                        <span className="font-medium text-white">Email:</span> admin@foodiehub.com
+                        <span className="font-medium text-white">Email:</span> admin@ChatServe.com
                       </p>
                       <p className="text-xs leading-6 text-white/70">
                         <span className="font-medium text-white">Password:</span> Admin@1234!

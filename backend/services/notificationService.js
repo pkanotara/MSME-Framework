@@ -4,7 +4,7 @@ const logger = require('../utils/logger');
 const sendDashboardCredentials = async (whatsappNumber, email, tempPassword, dashboardUrl) => {
   try {
     await sendFromMainBot(whatsappNumber,
-      `🔐 *Your FoodieHub Dashboard*\n\nURL: ${dashboardUrl}/login\nEmail: ${email}\nPassword: ${tempPassword}\n\n⚠️ Please change your password after first login!`
+      `🔐 *Your ChatServe Dashboard*\n\nURL: ${dashboardUrl}/login\nEmail: ${email}\nPassword: ${tempPassword}\n\n⚠️ Please change your password after first login!`
     );
   } catch (err) {
     logger.error('Failed to send dashboard credentials via WhatsApp:', err.message);

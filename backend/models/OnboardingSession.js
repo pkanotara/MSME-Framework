@@ -8,6 +8,7 @@ const onboardingSessionSchema = new mongoose.Schema({
     enum: [
       'start',
       'owner_name',
+      'owner_name_confirm', // ✅ ADDED
       'restaurant_name',
       'restaurant_whatsapp_number',
       'email',
@@ -31,6 +32,7 @@ const onboardingSessionSchema = new mongoose.Schema({
   // Collected data
   data: {
     ownerName: String,
+    waProfileName: String, // ✅ ADDED (used for owner_name_confirm step)
     restaurantName: String,
     targetBusinessNumber: String,
     email: String,

@@ -29,7 +29,7 @@ export default function AdminBroadcast() {
           <Megaphone size={20} className="text-brand-500 shrink-0" />
           <div>
             <p className="text-sm font-medium text-surface-900">Platform Broadcast</p>
-            <p className="text-xs text-surface-500">Messages will be sent via the main FoodieHub WhatsApp bot</p>
+            <p className="text-xs text-surface-500">Messages will be sent via the main ChatServe WhatsApp bot</p>
           </div>
         </div>
 
@@ -54,7 +54,7 @@ export default function AdminBroadcast() {
           <div className="bg-surface-50 border border-surface-200 rounded-xl p-4">
             <p className="text-xs font-medium text-surface-500 mb-2">Preview (WhatsApp format):</p>
             <div className="bg-green-50 border border-green-200 rounded-lg p-3 max-w-xs">
-              <p className="text-xs font-semibold text-green-800 mb-1">📢 FoodieHub Update</p>
+              <p className="text-xs font-semibold text-green-800 mb-1">📢 ChatServe Update</p>
               <p className="text-xs text-surface-700 whitespace-pre-wrap">{message}</p>
             </div>
           </div>

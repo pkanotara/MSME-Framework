@@ -1,238 +1,476 @@
-// const Customer = require('../models/Customer');
-// const Order = require('../models/Order');
-// const Restaurant = require('../models/Restaurant');
-// const WhatsAppConfig = require('../models/WhatsAppConfig');
-// const { MenuCategory, MenuItem } = require('../models/Menu');
-// const { sendTextMessage, sendListMessage, sendButtonMessage } = require('./whatsappService');
-// const logger = require('../utils/logger');
+// const Customer = require("../models/Customer");
+// const Order = require("../models/Order");
+// const Restaurant = require("../models/Restaurant");
+// const WhatsAppConfig = require("../models/WhatsAppConfig");
+// const { MenuCategory, MenuItem } = require("../models/Menu");
+// const {
+//   sendTextMessage,
+//   sendListMessage,
+//   sendButtonMessage,
+// } = require("./whatsappService");
+// const logger = require("../utils/logger");
 
 // /**
-//  * Handle inbound messages for a specific restaurant's WhatsApp Business number
-//  * This is called when message arrives on a restaurant's OWN phone number (not main bot)
+//  * Handle inbound messages for a restaurant's WhatsApp Business number
 //  */
 // const handleRestaurantBotMessage = async (
 //   phoneNumberId,
 //   senderNumber,
 //   messageText,
 //   messageType,
-//   interactiveReply
+//   interactiveReply,
+//   contacts = [],
 // ) => {
 //   try {
-//     // Find WhatsApp config for this phone number
-//     const waConfig = await WhatsAppConfig.findOne({ phoneNumberId }).select('+accessToken');
+//     const waConfig = await WhatsAppConfig.findOne({
+//       phoneNumberId,
+//       botEnabled: true,
+//       signupStatus: "configured",
+//     }).select("+accessToken");
+
 //     if (!waConfig) {
-//       logger.warn(`No WhatsApp config found for phoneNumberId: ${phoneNumberId}`);
-//       return;
-//     }
-//     if (!waConfig.botEnabled) {
-//       logger.debug(`Bot disabled for phoneNumberId: ${phoneNumberId}`);
+//       logger.warn(`No active bot config for phoneNumberId: ${phoneNumberId}`);
 //       return;
 //     }
 
 //     const restaurant = await Restaurant.findById(waConfig.restaurant);
-//     if (!restaurant || restaurant.status !== 'active') {
-//       logger.warn(`Restaurant not active for phoneNumberId: ${phoneNumberId}`);
-//       return;
-//     }
+//     if (!restaurant || restaurant.status !== "active") return;
 
-//     // Use restaurant's own access token if available, fallback to main
 //     const token = waConfig.accessToken || process.env.MAIN_ACCESS_TOKEN;
 
-//     // Get or create customer record
+//     // Get or create customer
 //     let customer = await Customer.findOne({
 //       restaurant: restaurant._id,
 //       whatsappNumber: senderNumber,
 //     });
+
 //     if (!customer) {
 //       customer = await Customer.create({
 //         restaurant: restaurant._id,
 //         whatsappNumber: senderNumber,
-//         botSession: { step: 'idle', cart: [], lastActivity: new Date() },
+//         botSession: { step: "idle", cart: [], lastActivity: new Date() },
 //       });
+//     }
+
+//     // ✅ ADD THIS (HERE)
+//     const waProfileName = contacts?.[0]?.profile?.name?.trim();
+//     if (waProfileName && !customer.name) {
+//       customer.name = waProfileName;
+//       await customer.save();
 //     }
 
 //     customer.botSession.lastActivity = new Date();
 
-//     // Determine text to process
-//     const inputText = interactiveReply?.id || interactiveReply?.title || messageText || '';
+//     const inputText =
+//       interactiveReply?.id || interactiveReply?.title || messageText || "";
 
-//     logger.debug(`Restaurant bot message: ${senderNumber} → ${restaurant.name} | ${inputText}`);
-
-//     await processCustomerStep(restaurant, customer, waConfig, token, phoneNumberId, inputText, messageType);
+//     await processStep(
+//       restaurant,
+//       customer,
+//       token,
+//       phoneNumberId,
+//       inputText,
+//       messageType,
+//     );
 //   } catch (err) {
-//     logger.error('Restaurant bot error:', err.message);
+//     logger.error("Restaurant bot error:", err);
 //   }
 // };
 
-// // ── Message helpers ──────────────────────────────────────────────────────────
-// const send = (phoneNumberId, token, to, text) =>
-//   sendTextMessage(phoneNumberId, token, to, text);
+// // ── Helpers ──────────────────────────────────────────────────────────────────
+// const send = (pid, token, to, text) => sendTextMessage(pid, token, to, text);
 
-// const sendButtons = (phoneNumberId, token, to, body, buttons) =>
-//   sendButtonMessage(phoneNumberId, token, to, body, buttons);
+// const sendBtn = (pid, token, to, body, buttons) =>
+//   sendButtonMessage(pid, token, to, body, buttons);
 
-// const sendList = (phoneNumberId, token, to, header, body, footer, btnText, sections) =>
-//   sendListMessage(phoneNumberId, token, to, header, body, footer, btnText, sections);
+// const sendList = (pid, token, to, header, body, footer, btnText, sections) =>
+//   sendListMessage(pid, token, to, header, body, footer, btnText, sections);
 
-// // ── Main step processor ──────────────────────────────────────────────────────
-// const processCustomerStep = async (
-//   restaurant, customer, waConfig, token, phoneNumberId, text, messageType
+// // ── Main step processor ───────────────────────────────────────────────────────
+// const processStep = async (
+//   restaurant,
+//   customer,
+//   token,
+//   pid,
+//   text,
+//   messageType,
 // ) => {
 //   const { step } = customer.botSession;
 //   const to = customer.whatsappNumber;
-//   const lower = (text || '').toLowerCase().trim();
+//   const lower = (text || "").toLowerCase().trim();
 
-//   // ── Global commands (work from any step) ──────────────────────────────────
-//   if (['hi', 'hello', 'hey', 'start', 'menu', 'hii', 'helo'].includes(lower)) {
-//     await sendGreeting(restaurant, customer, waConfig, token, phoneNumberId);
+//   // ── Global commands (always available) ──────────────────────────────────────
+//   if (["hi", "hello", "hey", "start", "hii", "menu"].includes(lower)) {
+//     await startGreeting(restaurant, customer, token, pid);
 //     return;
 //   }
-//   if (lower === 'cart' || text === 'view_cart') {
-//     await sendCartSummary(restaurant, customer, token, phoneNumberId);
+//   if (text === "main_menu" || lower === "back") {
+//     await showMainMenu(restaurant, customer, token, pid);
 //     return;
 //   }
-//   if (lower === 'cancel' || text === 'cancel_order') {
+//   if (text === "view_cart" || lower === "cart") {
+//     await showCart(restaurant, customer, token, pid);
+//     return;
+//   }
+//   if (text === "help") {
+//     await showHelp(restaurant, customer, token, pid);
+//     return;
+//   }
+//   if (text === "clear_cart") {
 //     customer.botSession.cart = [];
-//     customer.botSession.step = 'idle';
+//     customer.botSession.step = "main_menu";
 //     await customer.save();
-//     await send(phoneNumberId, token, to, `🛒 Cart cleared! Send *menu* to start again.`);
+//     await sendBtn(
+//       pid,
+//       token,
+//       to,
+//       `🗑️ Cart cleared!\n\nWhat would you like to do?`,
+//       [
+//         { id: "order_food", title: "🍕 Order Food" },
+//         { id: "help", title: "📞 Help" },
+//       ],
+//     );
 //     return;
 //   }
-//   if (['help', 'faq', 'info'].includes(lower) || text === 'faq') {
-//     await sendFAQ(restaurant, token, phoneNumberId, to);
-//     return;
-//   }
-//   if (lower === 'track' || text === 'track_order') {
-//     await sendLastOrderStatus(restaurant, customer, token, phoneNumberId);
+//   if (text === "cancel_order") {
+//     await handleCancelOrder(restaurant, customer, token, pid);
 //     return;
 //   }
 
-//   // ── Step-based routing ────────────────────────────────────────────────────
+//   // ── Step routing ─────────────────────────────────────────────────────────────
 //   switch (step) {
-//     case 'browsing_categories':
-//       await handleCategorySelection(restaurant, customer, token, phoneNumberId, text);
+//     case "idle":
+//     case "greeting":
+//       await handleGreetingReply(restaurant, customer, token, pid, text);
 //       break;
-//     case 'browsing_items':
-//       await handleItemAction(restaurant, customer, token, phoneNumberId, text);
+//     case "name_change":
+//       await handleNameChange(restaurant, customer, token, pid, text);
 //       break;
-//     case 'cart_review':
-//       await handleCartAction(restaurant, customer, token, phoneNumberId, text);
+//     case "main_menu":
+//       await handleMainMenuReply(restaurant, customer, token, pid, text);
 //       break;
-//     case 'confirm_order':
-//       await handleOrderConfirmation(restaurant, customer, token, phoneNumberId, text);
+//     case "browsing_categories":
+//       await handleCategorySelect(restaurant, customer, token, pid, text);
+//       break;
+//     case "browsing_items":
+//       await handleItemBrowse(
+//         restaurant,
+//         customer,
+//         token,
+//         pid,
+//         text,
+//         messageType,
+//       );
+//       break;
+//     case "checkout_address":
+//       await handleAddressInput(
+//         restaurant,
+//         customer,
+//         token,
+//         pid,
+//         text,
+//         messageType,
+//       );
+//       break;
+//     case "checkout_confirm":
+//       await handleCheckoutConfirm(restaurant, customer, token, pid, text);
+//       break;
+//     case "checkout_payment":
+//       await handlePayment(restaurant, customer, token, pid, text);
+//       break;
+//     case "track_order":
+//       await showTrackOrder(restaurant, customer, token, pid);
 //       break;
 //     default:
-//       await sendGreeting(restaurant, customer, waConfig, token, phoneNumberId);
+//       await startGreeting(restaurant, customer, token, pid);
 //   }
 // };
 
-// // ── Greeting + Category List ─────────────────────────────────────────────────
-// const sendGreeting = async (restaurant, customer, waConfig, token, phoneNumberId) => {
+// // ── 1. Entry / Greeting ───────────────────────────────────────────────────────
+// const startGreeting = async (restaurant, customer, token, pid) => {
 //   const to = customer.whatsappNumber;
 
-//   customer.botSession.step = 'browsing_categories';
+//   // Check if returning user with cart
+//   if (customer.botSession.cart?.length > 0 && customer.totalOrders > 0) {
+//     const cartCount = customer.botSession.cart.length;
+//     customer.botSession.step = "main_menu";
+//     await customer.save();
+
+//     await sendBtn(
+//       pid,
+//       token,
+//       to,
+//       `Welcome back 👋\n\nYou still have *${cartCount} item(s)* in your cart 😏\n\nWhat would you like to do?`,
+//       [
+//         { id: "view_cart", title: "🛒 Continue Order" },
+//         { id: "clear_cart", title: "🔄 Start Fresh" },
+//       ],
+//     );
+//     return;
+//   }
+
+//   // New or returning without cart
+//   const name = customer.name;
+//   customer.botSession.step = "greeting";
 //   customer.botSession.cart = [];
 //   await customer.save();
 
+//   if (name) {
+//     await sendBtn(
+//       pid,
+//       token,
+//       to,
+//       `Hey 👋 Welcome to *${restaurant.name}*\n\nCan I call you *${name}*?`,
+//       [
+//         { id: "confirm_name", title: "✅ Yes" },
+//         { id: "change_name", title: "✏️ Change" },
+//       ],
+//     );
+//   } else {
+//     await send(
+//       pid,
+//       token,
+//       to,
+//       `Hey 👋 Welcome to *${restaurant.name}*!\n\nWhat's your name? 😊`,
+//     );
+//     customer.botSession.step = "name_change";
+//     await customer.save();
+//   }
+// };
+
+// // ── 2. Greeting reply ────────────────────────────────────────────────────────
+// const handleGreetingReply = async (restaurant, customer, token, pid, text) => {
+//   const to = customer.whatsappNumber;
+
+//   if (text === "confirm_name") {
+//     await showMainMenu(restaurant, customer, token, pid);
+//   } else if (text === "change_name") {
+//     customer.botSession.step = "name_change";
+//     await customer.save();
+//     await send(pid, token, to, `What would you like me to call you? ✏️`);
+//   } else {
+//     // They typed their name directly
+//     await handleNameChange(restaurant, customer, token, pid, text);
+//   }
+// };
+
+// // ── 3. Name change ───────────────────────────────────────────────────────────
+// const handleNameChange = async (restaurant, customer, token, pid, text) => {
+//   const to = customer.whatsappNumber;
+
+//   const t = (text || '').trim();
+//   const bad = ['hi', 'hello', 'hey', 'hii', 'start', 'restart', 'menu'];
+
+//   if (!t || t.length < 2 || bad.includes(t.toLowerCase())) {
+//     await send(pid, token, to, `🙂 Please enter your real name (example: Pravin).`);
+//     return;
+//   }
+
+//   customer.name = t;
+//   customer.botSession.step = 'greeting';
+//   await customer.save();
+
+//   await sendBtn(pid, token, to,
+//     `Nice to meet you, *${customer.name}*! 🎉`,
+//     [{ id: 'confirm_name', title: '✅ Continue' }]
+//   );
+// };
+
+// // ── 4. Main Menu ─────────────────────────────────────────────────────────────
+// const showMainMenu = async (restaurant, customer, token, pid) => {
+//   const to = customer.whatsappNumber;
+//   const name = customer.name ? `, ${customer.name}` : "";
+
+//   customer.botSession.step = "main_menu";
+//   await customer.save();
+
+//   const cartCount = customer.botSession.cart?.length || 0;
+//   const cartLabel = cartCount > 0 ? `🛒 Cart (${cartCount})` : "🛒 View Cart";
+
+//   await sendBtn(pid, token, to, `What are you craving today${name}? 😋`, [
+//     { id: "order_food", title: "🍕 Order Food" },
+//     { id: "view_cart", title: cartLabel },
+//     { id: "track_order", title: "📦 Track Order" },
+//   ]);
+// };
+
+// // ── 5. Main menu reply ───────────────────────────────────────────────────────
+// const handleMainMenuReply = async (restaurant, customer, token, pid, text) => {
+//   const to = customer.whatsappNumber;
+
+//   if (text === "order_food") {
+//     await showCategories(restaurant, customer, token, pid);
+//   } else if (text === "view_cart") {
+//     await showCart(restaurant, customer, token, pid);
+//   } else if (text === "track_order") {
+//     await showTrackOrder(restaurant, customer, token, pid);
+//   } else if (text === "help") {
+//     await showHelp(restaurant, customer, token, pid);
+//   } else {
+//     await showMainMenu(restaurant, customer, token, pid);
+//   }
+// };
+
+// // ── 6. Category Selection ────────────────────────────────────────────────────
+// const showCategories = async (restaurant, customer, token, pid) => {
+//   const to = customer.whatsappNumber;
 //   const categories = await MenuCategory.find({
 //     restaurant: restaurant._id,
 //     isActive: true,
-//   }).sort('sortOrder');
+//   }).sort("sortOrder");
 
 //   if (categories.length === 0) {
-//     await send(phoneNumberId, token, to,
-//       `👋 Welcome to *${restaurant.name}*!\n\nWe're setting up our menu. Please check back soon! 🍽️`
+//     await send(
+//       pid,
+//       token,
+//       to,
+//       `😔 Menu is being updated. Please check back soon!\n\nSend *menu* to go back.`,
 //     );
 //     return;
 //   }
 
-//   const sections = [{
-//     title: 'Our Menu',
-//     rows: categories.map(cat => ({
-//       id: `cat_${cat._id}`,
-//       title: cat.name.substring(0, 24),
-//       description: cat.description?.substring(0, 72) || '',
-//     })),
-//   }];
-
-//   await sendList(
-//     phoneNumberId, token, to,
-//     `🍽️ ${restaurant.name}`,
-//     `Welcome! Browse our menu categories below.\n\n` +
-//     `💬 Send *cart* to view cart\n💬 Send *help* for FAQ`,
-//     null,
-//     'View Menu',
-//     sections
-//   );
-// };
-
-// // ── Category → Items ─────────────────────────────────────────────────────────
-// const handleCategorySelection = async (restaurant, customer, token, phoneNumberId, text) => {
-//   const to = customer.whatsappNumber;
-
-//   if (!text.startsWith('cat_')) {
-//     await send(phoneNumberId, token, to,
-//       `Please select a category from the menu. Send *menu* to see categories.`
-//     );
-//     return;
-//   }
-
-//   const categoryId = text.replace('cat_', '');
-//   const [items, category] = await Promise.all([
-//     MenuItem.find({ restaurant: restaurant._id, category: categoryId, isAvailable: true }).sort('sortOrder'),
-//     MenuCategory.findById(categoryId),
-//   ]);
-
-//   if (!items.length) {
-//     await send(phoneNumberId, token, to,
-//       `😔 No items available in this category right now.\n\nSend *menu* to browse others.`
-//     );
-//     return;
-//   }
-
-//   customer.botSession.step = 'browsing_items';
-//   customer.botSession.currentCategoryId = categoryId;
+//   customer.botSession.step = "browsing_categories";
 //   await customer.save();
 
-//   const sections = [{
-//     title: category?.name || 'Items',
-//     rows: items.map(item => ({
-//       id: `item_${item._id}`,
-//       title: item.name.substring(0, 24),
-//       description: `₹${item.price}${item.isVeg ? ' 🟢' : ' 🔴'} - ${(item.description || '').substring(0, 45)}`,
-//     })),
-//   }];
+//   const sections = [
+//     {
+//       title: `${restaurant.name} Menu`,
+//       rows: categories.map((cat) => ({
+//         id: `cat_${cat._id}`,
+//         title: cat.name.substring(0, 24),
+//         description: (cat.description || "").substring(0, 72),
+//       })),
+//     },
+//   ];
 
 //   await sendList(
-//     phoneNumberId, token, to,
-//     `📂 ${category?.name || 'Menu'}`,
-//     `Select an item to add to your cart:`,
-//     `Send *menu* to go back`,
-//     'Select Item',
-//     sections
+//     pid,
+//     token,
+//     to,
+//     `🍽️ Our Menu`,
+//     `Nice 😄 Here's what we have!\n\nSelect a category to browse:`,
+//     `Send *cart* anytime to view your cart`,
+//     "Browse Menu",
+//     sections,
 //   );
 // };
 
-// // ── Item action ───────────────────────────────────────────────────────────────
-// const handleItemAction = async (restaurant, customer, token, phoneNumberId, text) => {
+// // ── 7. Category selected → show items ───────────────────────────────────────
+// const handleCategorySelect = async (restaurant, customer, token, pid, text) => {
 //   const to = customer.whatsappNumber;
 
-//   if (text === 'menu') {
-//     customer.botSession.step = 'browsing_categories';
-//     await customer.save();
-//     await sendGreeting(restaurant, customer, null, token, phoneNumberId);
+//   if (text === "order_food") {
+//     await showCategories(restaurant, customer, token, pid);
 //     return;
 //   }
 
-//   if (text.startsWith('item_')) {
-//     const itemId = text.replace('item_', '');
+//   if (!text.startsWith("cat_")) {
+//     await showCategories(restaurant, customer, token, pid);
+//     return;
+//   }
+
+//   const categoryId = text.replace("cat_", "");
+//   const category = await MenuCategory.findById(categoryId);
+//   const items = await MenuItem.find({
+//     restaurant: restaurant._id,
+//     category: categoryId,
+//     isAvailable: true,
+//   }).sort("sortOrder");
+
+//   if (items.length === 0) {
+//     await sendBtn(
+//       pid,
+//       token,
+//       to,
+//       `😔 No items available in *${category?.name}* right now.`,
+//       [
+//         { id: "order_food", title: "🍕 Browse Menu" },
+//         { id: "view_cart", title: "🛒 View Cart" },
+//       ],
+//     );
+//     return;
+//   }
+
+//   // Store items list and current index for browsing
+//   customer.botSession.step = "browsing_items";
+//   customer.botSession.currentCategoryId = categoryId;
+//   customer.botSession.currentCategoryName = category?.name || "Items";
+//   customer.botSession.itemsList = items.map((i) => i._id.toString());
+//   customer.botSession.currentItemIndex = 0;
+//   await customer.save();
+
+//   await showItem(restaurant, customer, token, pid, items[0]);
+// };
+
+// // ── 8. Show single item with image ───────────────────────────────────────────
+// const showItem = async (restaurant, customer, token, pid, item) => {
+//   const to = customer.whatsappNumber;
+//   const index = customer.botSession.currentItemIndex || 0;
+//   const total = customer.botSession.itemsList?.length || 1;
+//   const vegIcon = item.isVeg ? "🟢" : "🔴";
+
+//   // Send image if available
+//   if (item.imageUrl) {
+//     try {
+//       const axios = require("axios");
+//       const GRAPH_BASE = `https://graph.facebook.com/${process.env.META_GRAPH_API_VERSION || "v19.0"}`;
+//       await axios.post(
+//         `${GRAPH_BASE}/${pid}/messages`,
+//         {
+//           messaging_product: "whatsapp",
+//           to,
+//           type: "image",
+//           image: { link: item.imageUrl },
+//         },
+//         { headers: { Authorization: `Bearer ${token}` } },
+//       );
+//     } catch (err) {
+//       logger.warn("Image send failed:", err.message);
+//     }
+//   }
+
+//   const buttons = [{ id: `add_${item._id}`, title: "➕ Add to Cart" }];
+
+//   if (index < total - 1) {
+//     buttons.push({ id: "next_item", title: "➡️ Next" });
+//   }
+//   buttons.push({ id: "view_cart", title: "🛒 Cart" });
+
+//   await sendBtn(
+//     pid,
+//     token,
+//     to,
+//     `${vegIcon} *${item.name}*\n` +
+//       `💰 ₹${item.price}\n\n` +
+//       `${item.description || ""}\n\n` +
+//       `_Item ${index + 1} of ${total} in ${customer.botSession.currentCategoryName}_`,
+//     buttons,
+//   );
+// };
+
+// // ── 9. Item browsing actions ─────────────────────────────────────────────────
+// const handleItemBrowse = async (
+//   restaurant,
+//   customer,
+//   token,
+//   pid,
+//   text,
+//   messageType,
+// ) => {
+//   const to = customer.whatsappNumber;
+
+//   // Add to cart
+//   if (text.startsWith("add_")) {
+//     const itemId = text.replace("add_", "");
 //     const item = await MenuItem.findById(itemId);
 //     if (!item) {
-//       await send(phoneNumberId, token, to, `Item not found. Send *menu* to browse.`);
+//       await send(pid, token, to, `Item not found. Send *menu* to browse.`);
 //       return;
 //     }
 
-//     const existing = customer.botSession.cart.find(c => c.item?.toString() === itemId);
+//     const existing = customer.botSession.cart.find(
+//       (c) => c.item?.toString() === itemId,
+//     );
 //     if (existing) {
 //       existing.quantity += 1;
 //     } else {
@@ -245,170 +483,351 @@
 //     }
 //     await customer.save();
 
-//     const total = customer.botSession.cart.reduce((s, i) => s + i.price * i.quantity, 0);
-
-//     await sendButtons(phoneNumberId, token, to,
-//       `✅ *${item.name}* added!\n` +
-//       `💰 Price: ₹${item.price}\n` +
-//       `🛒 Cart: ${customer.botSession.cart.length} item(s) | ₹${total}\n\nWhat next?`,
+//     await sendBtn(
+//       pid,
+//       token,
+//       to,
+//       `Added to your cart ✅\n\n` +
+//         `🛍️ *${item.name}* — ₹${item.price}\n` +
+//         `Cart: ${customer.botSession.cart.length} item(s)`,
 //       [
-//         { id: 'view_cart', title: '🛒 View Cart' },
-//         { id: 'menu', title: '🍽️ More Items' },
-//       ]
+//         { id: "order_food", title: "➕ Add More" },
+//         { id: "view_cart", title: "🛒 View Cart" },
+//         { id: "checkout_start", title: "💳 Checkout" },
+//       ],
 //     );
 //     return;
 //   }
 
-//   await send(phoneNumberId, token, to,
-//     `Please select an item from the list, or send *menu* to browse categories.`
-//   );
+//   // Next item
+//   if (text === "next_item") {
+//     const items = customer.botSession.itemsList || [];
+//     const nextIndex = (customer.botSession.currentItemIndex || 0) + 1;
+
+//     if (nextIndex >= items.length) {
+//       await sendBtn(pid, token, to, `That's all in this category! 😊`, [
+//         { id: "order_food", title: "🍕 Browse More" },
+//         { id: "view_cart", title: "🛒 View Cart" },
+//       ]);
+//       return;
+//     }
+
+//     customer.botSession.currentItemIndex = nextIndex;
+//     await customer.save();
+
+//     const item = await MenuItem.findById(items[nextIndex]);
+//     if (item) await showItem(restaurant, customer, token, pid, item);
+//     return;
+//   }
+
+//   // Checkout
+//   if (text === "checkout_start") {
+//     await startCheckout(restaurant, customer, token, pid);
+//     return;
+//   }
+
+//   // Fallback
+//   await showCategories(restaurant, customer, token, pid);
 // };
 
-// // ── Cart Summary ──────────────────────────────────────────────────────────────
-// const sendCartSummary = async (restaurant, customer, token, phoneNumberId) => {
+// // ── 10. Cart View ────────────────────────────────────────────────────────────
+// const showCart = async (restaurant, customer, token, pid) => {
 //   const to = customer.whatsappNumber;
-//   const cart = customer.botSession.cart;
+//   const cart = customer.botSession.cart || [];
 
-//   if (!cart || cart.length === 0) {
-//     await send(phoneNumberId, token, to,
-//       `🛒 Your cart is empty!\n\nSend *menu* to start ordering.`
+//   if (cart.length === 0) {
+//     await sendBtn(
+//       pid,
+//       token,
+//       to,
+//       `Your cart is empty 🛒\n\nAdd some delicious items!`,
+//       [
+//         { id: "order_food", title: "🍕 Order Food" },
+//         { id: "help", title: "📞 Help" },
+//       ],
 //     );
 //     return;
 //   }
 
-//   const total = cart.reduce((sum, i) => sum + i.price * i.quantity, 0);
-//   const cartText = cart.map(i =>
-//     `• ${i.name} ×${i.quantity} = ₹${i.price * i.quantity}`
-//   ).join('\n');
+//   const total = cart.reduce((s, i) => s + i.price * i.quantity, 0);
+//   const itemList = cart
+//     .map((i) => `• *${i.name}* x${i.quantity} — ₹${i.price * i.quantity}`)
+//     .join("\n");
 
-//   customer.botSession.step = 'cart_review';
+//   customer.botSession.step = "main_menu";
 //   await customer.save();
 
-//   await sendButtons(phoneNumberId, token, to,
-//     `🛒 *Your Cart — ${restaurant.name}*\n\n${cartText}\n\n💰 *Total: ₹${total}*`,
+//   await sendBtn(
+//     pid,
+//     token,
+//     to,
+//     `Here's your cart 🛒\n\n${itemList}\n\n` +
+//       `─────────────────\n` +
+//       `💰 *Total: ₹${total}*`,
 //     [
-//       { id: 'checkout', title: '✅ Place Order' },
-//       { id: 'menu', title: '➕ Add More' },
-//       { id: 'cancel_order', title: '🗑️ Clear Cart' },
-//     ]
+//       { id: "order_food", title: "➕ Add More" },
+//       { id: "checkout_start", title: "💳 Checkout" },
+//       { id: "clear_cart", title: "❌ Clear Cart" },
+//     ],
 //   );
 // };
 
-// // ── Cart Actions ──────────────────────────────────────────────────────────────
-// const handleCartAction = async (restaurant, customer, token, phoneNumberId, text) => {
-//   if (text === 'checkout') {
-//     customer.botSession.step = 'confirm_order';
-//     await customer.save();
-//     await sendButtons(phoneNumberId, token, customer.whatsappNumber,
-//       `📋 *Confirm your order?*\n\n` +
-//       `Items: ${customer.botSession.cart.length}\n` +
-//       `Total: ₹${customer.botSession.cart.reduce((s, i) => s + i.price * i.quantity, 0)}\n\n` +
-//       `Select payment method:`,
-//       [
-//         { id: 'pay_cod', title: '💵 Cash on Delivery' },
-//         { id: 'pay_cancel', title: '❌ Cancel' },
-//       ]
-//     );
-//   } else if (text === 'menu') {
-//     customer.botSession.step = 'browsing_categories';
-//     await customer.save();
-//     await sendGreeting(restaurant, customer, null, token, phoneNumberId);
-//   } else {
-//     await sendCartSummary(restaurant, customer, token, phoneNumberId);
+// // ── 11. Checkout ─────────────────────────────────────────────────────────────
+// const startCheckout = async (restaurant, customer, token, pid) => {
+//   const to = customer.whatsappNumber;
+//   const cart = customer.botSession.cart || [];
+
+//   if (cart.length === 0) {
+//     await showCart(restaurant, customer, token, pid);
+//     return;
 //   }
+
+//   customer.botSession.step = "checkout_address";
+//   await customer.save();
+
+//   await sendBtn(
+//     pid,
+//     token,
+//     to,
+//     `Almost done 👍\n\n` +
+//       `📍 *Step 1 of 3: Delivery Address*\n\n` +
+//       `Where should we deliver?`,
+//     [
+//       { id: "use_saved_address", title: "📍 Use Saved Address" },
+//       { id: "type_address", title: "✏️ Type Address" },
+//     ],
+//   );
 // };
 
-// // ── Order Confirmation ────────────────────────────────────────────────────────
-// const handleOrderConfirmation = async (restaurant, customer, token, phoneNumberId, text) => {
+// // ── 12. Address input ────────────────────────────────────────────────────────
+// const handleAddressInput = async (
+//   restaurant,
+//   customer,
+//   token,
+//   pid,
+//   text,
+//   messageType,
+// ) => {
 //   const to = customer.whatsappNumber;
 
-//   if (text === 'pay_cod') {
-//     try {
-//       const order = new Order({
-//         restaurant: restaurant._id,
-//         customer: customer._id,
-//         customerNumber: to,
-//         items: customer.botSession.cart.map(i => ({
-//           menuItem: i.item,
-//           name: i.name,
-//           price: i.price,
-//           quantity: i.quantity,
-//         })),
-//         total: customer.botSession.cart.reduce((s, i) => s + i.price * i.quantity, 0),
-//         paymentMethod: 'cash_on_delivery',
-//         paymentStatus: 'pending',
-//       });
-//       await order.save();
-
-//       // Update restaurant stats
-//       await Restaurant.findByIdAndUpdate(restaurant._id, {
-//         $inc: { totalOrders: 1, totalRevenue: order.total },
-//       });
-
-//       // Update customer stats
-//       customer.totalOrders += 1;
-//       customer.totalSpent += order.total;
-//       customer.lastOrderAt = new Date();
-//       customer.botSession.cart = [];
-//       customer.botSession.step = 'idle';
-//       await customer.save();
-
-//       // Update menu item stats
-//       for (const item of order.items) {
-//         if (item.menuItem) {
-//           await MenuItem.findByIdAndUpdate(item.menuItem, {
-//             $inc: { totalOrdered: item.quantity },
-//           });
-//         }
-//       }
-
-//       await send(phoneNumberId, token, to,
-//         `🎉 *Order Placed Successfully!*\n\n` +
-//         `📋 Order #: ${order.orderNumber}\n` +
-//         `💰 Total: ₹${order.total}\n` +
-//         `💵 Payment: Cash on Delivery\n\n` +
-//         `We'll prepare your order right away!\n\n` +
-//         `Send *track* to check order status 📦`
-//       );
-
-//       // Notify restaurant owner (optional)
-//       logger.info(`New order ${order.orderNumber} for restaurant ${restaurant.name}`);
-
-//     } catch (err) {
-//       logger.error('Order creation error:', err);
-//       await send(phoneNumberId, token, to,
-//         `❌ Failed to place order. Please try again or contact the restaurant directly.`
-//       );
-//     }
-//   } else {
-//     customer.botSession.cart = [];
-//     customer.botSession.step = 'idle';
+//   if (text === "use_saved_address" && customer.address) {
+//     customer.botSession.deliveryAddress = customer.address;
 //     await customer.save();
-//     await send(phoneNumberId, token, to,
-//       `Order cancelled. Send *menu* to start fresh! 🍽️`
+//     await showConfirmDetails(restaurant, customer, token, pid);
+//     return;
+//   }
+
+//   if (text === "type_address" || text === "use_saved_address") {
+//     await send(pid, token, to, `📍 Please type your full delivery address:`);
+//     return;
+//   }
+
+//   // Location message
+//   if (messageType === "location") {
+//     customer.botSession.deliveryAddress = "Shared via location pin 📍";
+//     await customer.save();
+//     await showConfirmDetails(restaurant, customer, token, pid);
+//     return;
+//   }
+
+//   // Text address
+//   if (text && text.length > 5) {
+//     customer.botSession.deliveryAddress = text;
+//     customer.address = text; // Save for future
+//     await customer.save();
+//     await showConfirmDetails(restaurant, customer, token, pid);
+//     return;
+//   }
+
+//   await send(pid, token, to, `Please enter a valid delivery address 📍`);
+// };
+
+// // ── 13. Confirm details ──────────────────────────────────────────────────────
+// const showConfirmDetails = async (restaurant, customer, token, pid) => {
+//   const to = customer.whatsappNumber;
+//   const cart = customer.botSession.cart || [];
+//   const total = cart.reduce((s, i) => s + i.price * i.quantity, 0);
+
+//   customer.botSession.step = "checkout_confirm";
+//   await customer.save();
+
+//   await sendBtn(
+//     pid,
+//     token,
+//     to,
+//     `Let me confirm 📋\n\n` +
+//       `👤 *Name:* ${customer.name || "Not set"}\n` +
+//       `📍 *Address:* ${customer.botSession.deliveryAddress}\n` +
+//       `🛒 *Items:* ${cart.length}\n` +
+//       `💰 *Total:* ₹${total}`,
+//     [
+//       { id: "confirm_details", title: "✅ Confirm" },
+//       { id: "edit_address", title: "✏️ Edit Address" },
+//     ],
+//   );
+// };
+
+// // ── 14. Checkout confirm ─────────────────────────────────────────────────────
+// const handleCheckoutConfirm = async (
+//   restaurant,
+//   customer,
+//   token,
+//   pid,
+//   text,
+// ) => {
+//   const to = customer.whatsappNumber;
+
+//   if (text === "edit_address") {
+//     customer.botSession.step = "checkout_address";
+//     await customer.save();
+//     await send(pid, token, to, `📍 Please enter your new delivery address:`);
+//     return;
+//   }
+
+//   if (text === "confirm_details") {
+//     customer.botSession.step = "checkout_payment";
+//     await customer.save();
+
+//     const total = customer.botSession.cart.reduce(
+//       (s, i) => s + i.price * i.quantity,
+//       0,
+//     );
+
+//     await sendBtn(
+//       pid,
+//       token,
+//       to,
+//       `💰 *Step 3 of 3: Payment*\n\n` +
+//         `Total: ₹${total}\n\n` +
+//         `How would you like to pay?`,
+//       [
+//         { id: "pay_cod", title: "💵 Cash on Delivery" },
+//         { id: "pay_upi", title: "📲 UPI" },
+//       ],
+//     );
+//     return;
+//   }
+
+//   await showCart(restaurant, customer, token, pid);
+// };
+
+// // ── 15. Payment ──────────────────────────────────────────────────────────────
+// const handlePayment = async (restaurant, customer, token, pid, text) => {
+//   const to = customer.whatsappNumber;
+
+//   if (text === "pay_upi") {
+//     await sendBtn(
+//       pid,
+//       token,
+//       to,
+//       `📲 *UPI Payment*\n\n` +
+//         `Send payment to:\n` +
+//         `*UPI ID:* ${restaurant.upiId || "Contact restaurant"}\n\n` +
+//         `After payment, tap Confirm 👇`,
+//       [
+//         { id: "pay_cod", title: "✅ Payment Done" },
+//         { id: "cancel_order", title: "❌ Cancel" },
+//       ],
+//     );
+//     return;
+//   }
+
+//   if (text === "pay_cod" || text === "payment_done") {
+//     await placeOrder(
+//       restaurant,
+//       customer,
+//       token,
+//       pid,
+//       text === "pay_cod" ? "cash_on_delivery" : "upi",
+//     );
+//     return;
+//   }
+
+//   await showCart(restaurant, customer, token, pid);
+// };
+
+// // ── 16. Place order ──────────────────────────────────────────────────────────
+// const placeOrder = async (restaurant, customer, token, pid, paymentMethod) => {
+//   const to = customer.whatsappNumber;
+
+//   try {
+//     const order = new Order({
+//       restaurant: restaurant._id,
+//       customer: customer._id,
+//       customerNumber: to,
+//       items: customer.botSession.cart.map((i) => ({
+//         menuItem: i.item,
+//         name: i.name,
+//         price: i.price,
+//         quantity: i.quantity,
+//       })),
+//       total: customer.botSession.cart.reduce(
+//         (s, i) => s + i.price * i.quantity,
+//         0,
+//       ),
+//       paymentMethod,
+//       paymentStatus: paymentMethod === "cash_on_delivery" ? "pending" : "paid",
+//       notes: `Delivery: ${customer.botSession.deliveryAddress || "Not specified"}`,
+//     });
+
+//     await order.save();
+
+//     // Update stats
+//     await require("../models/Restaurant").findByIdAndUpdate(restaurant._id, {
+//       $inc: { totalOrders: 1, totalRevenue: order.total },
+//     });
+
+//     // Update customer
+//     customer.totalOrders += 1;
+//     customer.totalSpent += order.total;
+//     customer.lastOrderAt = new Date();
+//     customer.botSession.cart = [];
+//     customer.botSession.step = "idle";
+//     customer.botSession.lastOrderId = order._id.toString();
+//     customer.botSession.lastOrderNumber = order.orderNumber;
+//     await customer.save();
+
+//     // Update menu item stats
+//     for (const item of order.items) {
+//       if (item.menuItem) {
+//         await MenuItem.findByIdAndUpdate(item.menuItem, {
+//           $inc: { totalOrdered: item.quantity },
+//         });
+//       }
+//     }
+
+//     await sendBtn(
+//       pid,
+//       token,
+//       to,
+//       `Done 🎉 *Your order is placed!*\n\n` +
+//         `📋 Order ID: *${order.orderNumber}*\n` +
+//         `💰 Total: ₹${order.total}\n` +
+//         `💳 Payment: ${paymentMethod === "cash_on_delivery" ? "Cash on Delivery" : "UPI"}\n` +
+//         `⏱️ ETA: 30-45 mins\n\n` +
+//         `We'll notify you when your order is ready! 🚀`,
+//       [
+//         { id: "track_order", title: "📦 Track Order" },
+//         { id: "order_food", title: "🔁 Order Again" },
+//       ],
+//     );
+//   } catch (err) {
+//     logger.error("Order placement error:", err);
+//     await sendBtn(
+//       pid,
+//       token,
+//       to,
+//       `❌ Something went wrong placing your order.\nPlease try again!`,
+//       [
+//         { id: "view_cart", title: "🛒 Try Again" },
+//         { id: "help", title: "📞 Help" },
+//       ],
 //     );
 //   }
 // };
 
-// // ── FAQ ───────────────────────────────────────────────────────────────────────
-// const sendFAQ = async (restaurant, token, phoneNumberId, to) => {
-//   const hours = restaurant.workingHours
-//     ?.map(h => `${h.day.charAt(0).toUpperCase() + h.day.slice(1)}: ${h.isOpen ? `${h.open} - ${h.close}` : 'Closed'}`)
-//     .join('\n') || 'Contact the restaurant';
-
-//   await send(phoneNumberId, token, to,
-//     `❓ *Frequently Asked Questions*\n\n` +
-//     `*🕐 Working Hours:*\n${hours}\n\n` +
-//     `*📍 Address:*\n${restaurant.address || 'Contact the restaurant'}\n\n` +
-//     `*💳 Payment:*\nCash on Delivery\n\n` +
-//     `*📞 Contact:*\n${restaurant.phone || 'Message us here'}\n\n` +
-//     `*🍽️ Categories:*\n${restaurant.foodCategories?.join(', ') || 'Various'}\n\n` +
-//     `Send *menu* to start ordering!`
-//   );
-// };
-
-// // ── Track Last Order ──────────────────────────────────────────────────────────
-// const sendLastOrderStatus = async (restaurant, customer, token, phoneNumberId) => {
+// // ── 17. Track order ───────────────────────────────────────────────────────────
+// const showTrackOrder = async (restaurant, customer, token, pid) => {
 //   const to = customer.whatsappNumber;
 
 //   const lastOrder = await Order.findOne({
@@ -417,518 +836,115 @@
 //   }).sort({ createdAt: -1 });
 
 //   if (!lastOrder) {
-//     await send(phoneNumberId, token, to,
-//       `You haven't placed any orders yet! Send *menu* to order. 🍽️`
+//     await sendBtn(
+//       pid,
+//       token,
+//       to,
+//       `📦 No recent orders found.\n\nPlace your first order!`,
+//       [
+//         { id: "order_food", title: "🍕 Order Now" },
+//         { id: "main_menu", title: "🏠 Main Menu" },
+//       ],
 //     );
 //     return;
 //   }
 
-//   const statusEmoji = {
-//     pending: '⏳', confirmed: '✅', preparing: '👨‍🍳',
-//     ready: '📦', delivered: '🎉', cancelled: '❌',
+//   const statusMap = {
+//     pending: "⏳ Order received",
+//     confirmed: "✅ Order confirmed",
+//     preparing: "👨‍🍳 Being prepared",
+//     ready: "📦 Ready for pickup/delivery",
+//     delivered: "🎉 Delivered!",
+//     cancelled: "❌ Cancelled",
 //   };
 
-//   await send(phoneNumberId, token, to,
-//     `📦 *Your Last Order*\n\n` +
-//     `Order #: ${lastOrder.orderNumber}\n` +
-//     `Status: ${statusEmoji[lastOrder.status] || '⏳'} ${lastOrder.status.toUpperCase()}\n` +
-//     `Total: ₹${lastOrder.total}\n` +
-//     `Date: ${new Date(lastOrder.createdAt).toLocaleDateString()}\n\n` +
-//     `Send *menu* to order again!`
+//   const progress = {
+//     pending: "⏳ Received → ⬜ Preparing → ⬜ On the way → ⬜ Delivered",
+//     confirmed: "✅ Received → ⏳ Preparing → ⬜ On the way → ⬜ Delivered",
+//     preparing: "✅ Received → 👨‍🍳 Preparing → ⬜ On the way → ⬜ Delivered",
+//     ready: "✅ Received → ✅ Prepared → 🚀 On the way → ⬜ Delivered",
+//     delivered: "✅ Received → ✅ Prepared → ✅ Delivered → 🎉 Enjoy!",
+//     cancelled: "❌ Order was cancelled",
+//   };
+
+//   customer.botSession.step = "main_menu";
+//   await customer.save();
+
+//   await sendBtn(
+//     pid,
+//     token,
+//     to,
+//     `📦 *Order Tracking*\n\n` +
+//       `Order: *${lastOrder.orderNumber}*\n` +
+//       `Status: *${statusMap[lastOrder.status] || lastOrder.status}*\n\n` +
+//       `${progress[lastOrder.status] || ""}\n\n` +
+//       `Total: ₹${lastOrder.total}`,
+//     [
+//       { id: "main_menu", title: "🏠 Main Menu" },
+//       { id: "order_food", title: "🔁 Order Again" },
+//     ],
+//   );
+// };
+
+// // ── 18. Cancel order ──────────────────────────────────────────────────────────
+// const handleCancelOrder = async (restaurant, customer, token, pid) => {
+//   const to = customer.whatsappNumber;
+
+//   const lastOrder = await Order.findOne({
+//     restaurant: restaurant._id,
+//     customerNumber: to,
+//     status: { $in: ["pending", "confirmed"] },
+//   }).sort({ createdAt: -1 });
+
+//   if (!lastOrder) {
+//     await sendBtn(pid, token, to, `No active orders to cancel.`, [
+//       { id: "order_food", title: "🍕 Order Food" },
+//       { id: "main_menu", title: "🏠 Main Menu" },
+//     ]);
+//     return;
+//   }
+
+//   lastOrder.status = "cancelled";
+//   lastOrder.statusHistory.push({ status: "cancelled", changedBy: "customer" });
+//   await lastOrder.save();
+
+//   customer.botSession.step = "idle";
+//   await customer.save();
+
+//   await sendBtn(
+//     pid,
+//     token,
+//     to,
+//     `❌ Order *${lastOrder.orderNumber}* has been cancelled.\n\nWe hope to see you again soon!`,
+//     [
+//       { id: "order_food", title: "🍕 Order Again" },
+//       { id: "main_menu", title: "🏠 Main Menu" },
+//     ],
+//   );
+// };
+
+// // ── 19. Help ──────────────────────────────────────────────────────────────────
+// const showHelp = async (restaurant, customer, token, pid) => {
+//   const to = customer.whatsappNumber;
+//   customer.botSession.step = "main_menu";
+//   await customer.save();
+
+//   await sendBtn(
+//     pid,
+//     token,
+//     to,
+//     `Need help? I'm here 👍\n\n` +
+//       `📍 *Address:* ${restaurant.address || "Contact us"}\n` +
+//       `📧 *Email:* ${restaurant.email || "Contact us"}\n` +
+//       `🕐 *Hours:* Check our profile\n\n` +
+//       `What do you need?`,
+//     [
+//       { id: "cancel_order", title: "❌ Cancel Order" },
+//       { id: "main_menu", title: "🏠 Main Menu" },
+//       { id: "order_food", title: "🍕 Order Food" },
+//     ],
 //   );
 // };
 
 // module.exports = { handleRestaurantBotMessage };
 
-
-
-
-
-
-
-
-const Customer = require('../models/Customer');
-const Order = require('../models/Order');
-const Restaurant = require('../models/Restaurant');
-const WhatsAppConfig = require('../models/WhatsAppConfig');
-const { MenuCategory, MenuItem } = require('../models/Menu');
-const { sendTextMessage, sendListMessage, sendButtonMessage } = require('./whatsappService');
-const logger = require('../utils/logger');
-
-/**
- * Handle inbound messages for a restaurant's WhatsApp Business number
- * Called when a CUSTOMER messages the restaurant's number to place an order
- */
-const handleRestaurantBotMessage = async (phoneNumberId, senderNumber, messageText, messageType, interactiveReply) => {
-  try {
-    // Find the WhatsApp config for this phone number ID
-    const waConfig = await WhatsAppConfig.findOne({ phoneNumberId }).select('+accessToken');
-
-    if (!waConfig) {
-      logger.warn(`No WhatsApp config found for phoneNumberId: ${phoneNumberId}`);
-      return;
-    }
-
-    if (!waConfig.botEnabled) {
-      logger.info(`Bot disabled for phoneNumberId: ${phoneNumberId}`);
-      return;
-    }
-
-    const restaurant = await Restaurant.findById(waConfig.restaurant);
-    if (!restaurant) {
-      logger.warn(`Restaurant not found for config: ${waConfig._id}`);
-      return;
-    }
-
-    if (restaurant.status !== 'active') {
-      logger.info(`Restaurant ${restaurant.name} is not active (status: ${restaurant.status})`);
-      return;
-    }
-
-    // Use restaurant's own token if available, otherwise fall back to platform token
-    const token = waConfig.accessToken || process.env.MAIN_ACCESS_TOKEN;
-
-    logger.info(`Restaurant bot: ${restaurant.name} | from: ${senderNumber} | text: ${messageText}`);
-
-    // Get or create customer record
-    let customer = await Customer.findOne({ restaurant: restaurant._id, whatsappNumber: senderNumber });
-    if (!customer) {
-      customer = await Customer.create({
-        restaurant: restaurant._id,
-        whatsappNumber: senderNumber,
-        botSession: { step: 'idle', cart: [], lastActivity: new Date() },
-      });
-      logger.info(`New customer created for ${restaurant.name}: ${senderNumber}`);
-    }
-
-    customer.botSession.lastActivity = new Date();
-
-    // Determine input text from message or interactive reply
-    const inputText = interactiveReply?.id || interactiveReply?.title || messageText || '';
-
-    await processCustomerStep(restaurant, customer, waConfig, token, phoneNumberId, inputText, messageType);
-  } catch (err) {
-    logger.error('Restaurant bot error:', err.message, err.stack);
-  }
-};
-
-const send = (phoneNumberId, token, to, text) =>
-  sendTextMessage(phoneNumberId, token, to, text);
-
-const sendButtons = (phoneNumberId, token, to, body, buttons) =>
-  sendButtonMessage(phoneNumberId, token, to, body, buttons);
-
-const sendList = (phoneNumberId, token, to, header, body, footer, btnText, sections) =>
-  sendListMessage(phoneNumberId, token, to, header, body, footer, btnText, sections);
-
-const processCustomerStep = async (restaurant, customer, waConfig, token, phoneNumberId, text, messageType) => {
-  const { step } = customer.botSession;
-  const to = customer.whatsappNumber;
-  const lowerText = (text || '').toLowerCase().trim();
-
-  // ── Global Commands (work from any step) ──────────────────────────────────
-  if (['hi', 'hello', 'hey', 'start', 'hii', 'menu', ''].includes(lowerText) || step === 'idle') {
-    await sendGreeting(restaurant, customer, waConfig, token, phoneNumberId);
-    return;
-  }
-
-  if (lowerText === 'cart' || text === 'view_cart') {
-    await sendCartSummary(restaurant, customer, waConfig, token, phoneNumberId);
-    return;
-  }
-
-  if (lowerText === 'cancel' || text === 'cancel_order') {
-    customer.botSession.cart = [];
-    customer.botSession.step = 'idle';
-    await customer.save();
-    await send(phoneNumberId, token, to, `🛒 Cart cleared! Send *Hi* to start a new order.`);
-    return;
-  }
-
-  if (['help', 'faq', 'info'].includes(lowerText) || text === 'faq') {
-    await sendFAQ(restaurant, customer, waConfig, token, phoneNumberId);
-    return;
-  }
-
-  // ── Step-based routing ────────────────────────────────────────────────────
-  switch (step) {
-    case 'browsing_categories':
-      await handleCategorySelection(restaurant, customer, waConfig, token, phoneNumberId, text);
-      break;
-    case 'browsing_items':
-      await handleItemAction(restaurant, customer, waConfig, token, phoneNumberId, text);
-      break;
-    case 'cart_review':
-      await handleCartAction(restaurant, customer, waConfig, token, phoneNumberId, text);
-      break;
-    case 'confirm_order':
-      await handleOrderConfirmation(restaurant, customer, waConfig, token, phoneNumberId, text);
-      break;
-    default:
-      await sendGreeting(restaurant, customer, waConfig, token, phoneNumberId);
-  }
-};
-
-// ── Greeting + Category Menu ──────────────────────────────────────────────────
-const sendGreeting = async (restaurant, customer, waConfig, token, phoneNumberId) => {
-  const to = customer.whatsappNumber;
-  customer.botSession.step = 'browsing_categories';
-  customer.botSession.cart = [];
-  await customer.save();
-
-  const categories = await MenuCategory.find({
-    restaurant: restaurant._id,
-    isActive: true,
-  }).sort('sortOrder');
-
-  if (categories.length === 0) {
-    await send(phoneNumberId, token, to,
-      `👋 Welcome to *${restaurant.name}*!\n\n` +
-      `We're currently setting up our menu. Please check back soon! 🍽️\n\n` +
-      `For inquiries, contact us at: ${restaurant.email || restaurant.phone || 'N/A'}`
-    );
-    return;
-  }
-
-  // Check if restaurant is open
-  const now = new Date();
-  const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-  const today = dayNames[now.getDay()];
-  const todayHours = restaurant.workingHours?.find(h => h.day === today);
-  const isOpen = todayHours?.isOpen !== false;
-
-  const statusText = isOpen
-    ? `🟢 Open now (${todayHours?.open || '9:00'} - ${todayHours?.close || '22:00'})`
-    : `🔴 Currently closed`;
-
-  const sections = [{
-    title: `${restaurant.name} Menu`,
-    rows: categories.map(cat => ({
-      id: `cat_${cat._id}`,
-      title: cat.name.substring(0, 24),
-      description: cat.description?.substring(0, 72) || `Browse ${cat.name} items`,
-    })),
-  }];
-
-  await sendList(
-    phoneNumberId, token, to,
-    `🍽️ ${restaurant.name}`,
-    `👋 Welcome! ${statusText}\n\nChoose a category to browse our menu.\n\n_Send *cart* to view your cart | *help* for FAQ_`,
-    `${categories.length} categories available`,
-    'Browse Menu',
-    sections
-  );
-};
-
-// ── Category Selection ────────────────────────────────────────────────────────
-const handleCategorySelection = async (restaurant, customer, waConfig, token, phoneNumberId, text) => {
-  const to = customer.whatsappNumber;
-
-  if (text === 'menu' || text === 'back') {
-    customer.botSession.step = 'browsing_categories';
-    await customer.save();
-    await sendGreeting(restaurant, customer, waConfig, token, phoneNumberId);
-    return;
-  }
-
-  if (!text.startsWith('cat_')) {
-    await send(phoneNumberId, token, to,
-      `Please select a category from the menu, or send *menu* to see all categories.`
-    );
-    return;
-  }
-
-  const categoryId = text.replace('cat_', '');
-  const [items, category] = await Promise.all([
-    MenuItem.find({ restaurant: restaurant._id, category: categoryId, isAvailable: true }).sort('sortOrder'),
-    MenuCategory.findById(categoryId),
-  ]);
-
-  if (!items.length) {
-    await send(phoneNumberId, token, to,
-      `😔 No items available in *${category?.name}* right now.\n\nSend *menu* to browse other categories.`
-    );
-    return;
-  }
-
-  customer.botSession.step = 'browsing_items';
-  customer.botSession.currentCategoryId = categoryId;
-  await customer.save();
-
-  const sections = [{
-    title: category?.name || 'Menu Items',
-    rows: items.map(item => ({
-      id: `item_${item._id}`,
-      title: item.name.substring(0, 24),
-      description: `₹${item.price}${item.isVeg ? ' 🟢' : ' 🔴'} — ${(item.description || '').substring(0, 50)}`,
-    })),
-  }];
-
-  await sendList(
-    phoneNumberId, token, to,
-    `📂 ${category?.name}`,
-    `Select an item to add to your cart:\n\n_🟢 Veg  🔴 Non-Veg_`,
-    `Send *menu* to go back`,
-    'Select Item',
-    sections
-  );
-};
-
-// ── Item Action ───────────────────────────────────────────────────────────────
-const handleItemAction = async (restaurant, customer, waConfig, token, phoneNumberId, text) => {
-  const to = customer.whatsappNumber;
-
-  if (text === 'menu' || text === 'back') {
-    customer.botSession.step = 'browsing_categories';
-    await customer.save();
-    await sendGreeting(restaurant, customer, waConfig, token, phoneNumberId);
-    return;
-  }
-
-  if (text === 'view_cart') {
-    await sendCartSummary(restaurant, customer, waConfig, token, phoneNumberId);
-    return;
-  }
-
-  if (text.startsWith('item_')) {
-    const itemId = text.replace('item_', '');
-    const item = await MenuItem.findById(itemId);
-
-    if (!item || !item.isAvailable) {
-      await send(phoneNumberId, token, to,
-        `😔 This item is not available right now.\n\nSend *menu* to browse other items.`
-      );
-      return;
-    }
-
-    // Add to cart or increment quantity
-    const existing = customer.botSession.cart.find(c => c.item?.toString() === itemId);
-    if (existing) {
-      existing.quantity += 1;
-    } else {
-      customer.botSession.cart.push({
-        item: item._id,
-        name: item.name,
-        price: item.price,
-        quantity: 1,
-      });
-    }
-
-    customer.botSession.step = 'browsing_items';
-    await customer.save();
-
-    const cartTotal = customer.botSession.cart.reduce((s, i) => s + i.price * i.quantity, 0);
-    const cartItems = customer.botSession.cart.length;
-
-    await sendButtons(phoneNumberId, token, to,
-      `✅ *${item.name}* added to cart!\n` +
-      `💰 Price: ₹${item.price}\n\n` +
-      `🛒 Cart: ${cartItems} item(s) | Total: ₹${cartTotal}\n\n` +
-      `What would you like to do?`,
-      [
-        { id: 'view_cart', title: '🛒 View Cart' },
-        { id: 'menu', title: '🍽️ More Items' },
-      ]
-    );
-  } else {
-    await send(phoneNumberId, token, to,
-      `Please select an item from the list, or send *menu* to browse categories.`
-    );
-  }
-};
-
-// ── Cart Summary ──────────────────────────────────────────────────────────────
-const sendCartSummary = async (restaurant, customer, waConfig, token, phoneNumberId) => {
-  const to = customer.whatsappNumber;
-  const cart = customer.botSession.cart;
-
-  if (!cart || cart.length === 0) {
-    await send(phoneNumberId, token, to,
-      `🛒 Your cart is empty!\n\nSend *Hi* or *menu* to start ordering. 😊`
-    );
-    return;
-  }
-
-  const total = cart.reduce((sum, i) => sum + i.price * i.quantity, 0);
-  const cartText = cart
-    .map(i => `• ${i.name} × ${i.quantity} = ₹${i.price * i.quantity}`)
-    .join('\n');
-
-  customer.botSession.step = 'cart_review';
-  await customer.save();
-
-  await sendButtons(phoneNumberId, token, to,
-    `🛒 *Your Cart — ${restaurant.name}*\n\n${cartText}\n\n` +
-    `━━━━━━━━━━━━━━\n` +
-    `💰 *Total: ₹${total}*`,
-    [
-      { id: 'checkout', title: '✅ Place Order' },
-      { id: 'menu', title: '➕ Add More Items' },
-      { id: 'cancel_order', title: '🗑️ Clear Cart' },
-    ]
-  );
-};
-
-// ── Cart Actions ──────────────────────────────────────────────────────────────
-const handleCartAction = async (restaurant, customer, waConfig, token, phoneNumberId, text) => {
-  const to = customer.whatsappNumber;
-
-  if (text === 'checkout') {
-    customer.botSession.step = 'confirm_order';
-    await customer.save();
-
-    const total = customer.botSession.cart.reduce((s, i) => s + i.price * i.quantity, 0);
-    const itemCount = customer.botSession.cart.length;
-
-    await sendButtons(phoneNumberId, token, to,
-      `📋 *Confirm Your Order*\n\n` +
-      `🏪 ${restaurant.name}\n` +
-      `🛒 ${itemCount} item(s)\n` +
-      `💰 Total: ₹${total}\n\n` +
-      `Select payment method:`,
-      [
-        { id: 'pay_cod', title: '💵 Cash on Delivery' },
-        { id: 'pay_cancel', title: '❌ Cancel' },
-      ]
-    );
-  } else if (text === 'menu') {
-    customer.botSession.step = 'browsing_categories';
-    await customer.save();
-    await sendGreeting(restaurant, customer, waConfig, token, phoneNumberId);
-  } else {
-    await sendCartSummary(restaurant, customer, waConfig, token, phoneNumberId);
-  }
-};
-
-// ── Order Confirmation ────────────────────────────────────────────────────────
-const handleOrderConfirmation = async (restaurant, customer, waConfig, token, phoneNumberId, text) => {
-  const to = customer.whatsappNumber;
-
-  if (text === 'pay_cod') {
-    try {
-      // Create the order
-      const order = new Order({
-        restaurant: restaurant._id,
-        customer: customer._id,
-        customerNumber: to,
-        items: customer.botSession.cart.map(i => ({
-          menuItem: i.item,
-          name: i.name,
-          price: i.price,
-          quantity: i.quantity,
-        })),
-        total: customer.botSession.cart.reduce((s, i) => s + i.price * i.quantity, 0),
-        paymentMethod: 'cash_on_delivery',
-        paymentStatus: 'pending',
-        status: 'pending',
-      });
-      await order.save();
-
-      // Update restaurant stats
-      await Restaurant.findByIdAndUpdate(restaurant._id, {
-        $inc: { totalOrders: 1, totalRevenue: order.total },
-      });
-
-      // Update customer stats
-      customer.totalOrders += 1;
-      customer.totalSpent += order.total;
-      customer.lastOrderAt = new Date();
-      customer.botSession.cart = [];
-      customer.botSession.step = 'idle';
-      await customer.save();
-
-      // Update menu item order counts
-      for (const item of order.items) {
-        if (item.menuItem) {
-          await MenuItem.findByIdAndUpdate(item.menuItem, {
-            $inc: { totalOrdered: item.quantity },
-          }).catch(() => {});
-        }
-      }
-
-      // Send order confirmation to customer
-      await send(phoneNumberId, token, to,
-        `🎉 *Order Placed Successfully!*\n\n` +
-        `📋 Order #: *${order.orderNumber}*\n` +
-        `🏪 Restaurant: ${restaurant.name}\n` +
-        `💰 Total: ₹${order.total}\n` +
-        `💵 Payment: Cash on Delivery\n\n` +
-        `⏳ We'll prepare your order right away!\n\n` +
-        `_Send *Hi* to place another order 😊_`
-      );
-
-      // Notify restaurant owner (if they have their own number configured)
-      try {
-        const ownerConfig = await WhatsAppConfig.findOne({
-          restaurant: restaurant._id,
-        }).select('+accessToken');
-
-        if (ownerConfig && ownerConfig.phoneNumberId !== phoneNumberId) {
-          // Restaurant has a different owner notification number
-          // For now, we use the main bot to notify
-        }
-
-        // Notify via main bot to the restaurant owner's personal WhatsApp
-        const { sendFromMainBot } = require('./whatsappService');
-        const populatedRestaurant = await Restaurant.findById(restaurant._id).populate('owner');
-        if (populatedRestaurant?.owner?.whatsappNumber) {
-          await sendFromMainBot(
-            populatedRestaurant.owner.whatsappNumber,
-            `🔔 *New Order Alert!*\n\n` +
-            `📋 Order #: ${order.orderNumber}\n` +
-            `👤 Customer: ${to}\n` +
-            `🛒 Items: ${order.items.length}\n` +
-            `💰 Total: ₹${order.total}\n\n` +
-            `📊 Manage at: ${process.env.FRONTEND_URL}/dashboard/orders`
-          ).catch(() => {});
-        }
-      } catch (err) {
-        logger.warn('Owner notification failed:', err.message);
-      }
-
-      logger.info(`Order created: ${order.orderNumber} for restaurant: ${restaurant.name}`);
-
-    } catch (err) {
-      logger.error('Order creation error:', err);
-      await send(phoneNumberId, token, to,
-        `❌ Failed to place your order. Please try again.\n\nSend *Hi* to start over.`
-      );
-    }
-
-  } else {
-    // Cancelled
-    customer.botSession.cart = [];
-    customer.botSession.step = 'idle';
-    await customer.save();
-    await send(phoneNumberId, token, to,
-      `Order cancelled. Send *Hi* to start a new order! 🍽️`
-    );
-  }
-};
-
-// ── FAQ ───────────────────────────────────────────────────────────────────────
-const sendFAQ = async (restaurant, customer, waConfig, token, phoneNumberId) => {
-  const to = customer.whatsappNumber;
-
-  const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-  const today = dayNames[new Date().getDay()];
-  const todayHours = restaurant.workingHours?.find(h => h.day === today);
-  const hoursText = todayHours?.isOpen
-    ? `Today: ${todayHours.open} - ${todayHours.close}`
-    : 'Closed today';
-
-  await send(phoneNumberId, token, to,
-    `❓ *${restaurant.name} — FAQ*\n\n` +
-    `🕐 *Hours Today:*\n${hoursText}\n\n` +
-    `📍 *Address:*\n${restaurant.address || 'Contact us for address'}\n\n` +
-    `📧 *Email:*\n${restaurant.email || 'N/A'}\n\n` +
-    `💳 *Payment:*\nCash on Delivery\n\n` +
-    `🍽️ *We serve:*\n${restaurant.foodCategories?.join(', ') || 'Various cuisines'}\n\n` +
-    `━━━━━━━━━━━━━━\n` +
-    `Send *Hi* to start ordering!\n` +
-    `Send *cart* to view your cart\n` +
-    `Send *cancel* to clear cart`
-  );
-};
-
-module.exports = { handleRestaurantBotMessage };

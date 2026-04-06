@@ -110,7 +110,7 @@ export default function RestaurantLayout() {
         <header className="bg-white border-b border-zinc-200 px-6 py-4 shrink-0 flex items-center justify-between">
           <div>
             <p className="font-semibold text-zinc-900 text-base">{restaurantName}</p>
-            <p className="text-zinc-400 text-xs">Powered by FoodieHub</p>
+            <p className="text-zinc-400 text-xs">Powered by ChatServe</p>
           </div>
           {profile?.whatsappConfig?.botEnabled && (
             <span className="badge-active">● Bot Live</span>

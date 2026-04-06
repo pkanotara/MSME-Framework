@@ -1,7 +1,7 @@
 {
-  "name": "foodiehub-backend",
+  "name": "ChatServe-backend",
   "version": "1.0.0",
-  "description": "FoodieHub Onboarding Engine - Backend",
+  "description": "ChatServe Onboarding Engine - Backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

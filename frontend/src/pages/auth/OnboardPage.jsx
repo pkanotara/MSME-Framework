@@ -78,7 +78,7 @@ export default function OnboardPage() {
                   <div className="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0">4</div>
                   <div>
                     <p className="font-medium text-zinc-900 text-sm">Grant permissions</p>
-                    <p className="text-zinc-500 text-xs mt-0.5">Allow FoodieHub to manage messaging</p>
+                    <p className="text-zinc-500 text-xs mt-0.5">Allow ChatServe to manage messaging</p>
                   </div>
                 </div>
               </div>

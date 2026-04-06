@@ -6,6 +6,11 @@ const WhatsAppConfig = require('../models/WhatsAppConfig');
 const { authenticate, requireAdmin } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
+// In-memory nonce store for state validation (replace with Redis in production)
+// Maps base64(restaurantId) → { restaurantId, createdAt, metaSessionEvent, selectedPhoneNumberId }
+const pendingStates = new Map();
+const STATE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
 /**
  * GET /api/embedded-signup/callback
  * Meta redirects here after Embedded Signup completes
@@ -14,7 +19,7 @@ router.get('/callback', async (req, res) => {
   const { code, state, error, error_reason, error_description } = req.query;
 
   logger.info('Embedded Signup callback received');
-  logger.info(`code=${code ? 'present' : 'missing'}, state=${state}, error=${error}`);
+  logger.info(`code=${code ? 'present' : 'missing'}, state=${state ? 'present' : 'missing'}, error=${error}`);
 
   if (error) {
     const reason = error_description || error_reason || error;
@@ -28,9 +33,36 @@ router.get('/callback', async (req, res) => {
     return res.redirect(`${process.env.FRONTEND_URL}/onboard/error?reason=missing_params`);
   }
 
+  // ── State / session validation ──────────────────────────────────────────────
+  const session = pendingStates.get(state);
+  if (!session) {
+    logger.error(`Invalid or expired state param: ${state}`);
+    return res.redirect(`${process.env.FRONTEND_URL}/onboard/error?reason=invalid_state`);
+  }
+  if (Date.now() - session.createdAt > STATE_TTL_MS) {
+    pendingStates.delete(state);
+    logger.error(`Expired state param: ${state}`);
+    return res.redirect(`${process.env.FRONTEND_URL}/onboard/error?reason=expired_state`);
+  }
+
+  const { restaurantId, metaSessionEvent, selectedPhoneNumberId } = session;
+  pendingStates.delete(state); // consume — one-time use
+
+  // Verify the restaurant's signup is not already completed by another tenant
+  const waConfig = await WhatsAppConfig.findOne({ restaurant: restaurantId });
+  if (!waConfig) {
+    return res.redirect(`${process.env.FRONTEND_URL}/onboard/error?reason=config_not_found`);
+  }
+  if (waConfig.signupStatus === 'configured') {
+    logger.warn(`Duplicate callback for already-configured restaurant ${restaurantId}`);
+    return res.redirect(`${process.env.FRONTEND_URL}/onboard/success?restaurantId=${restaurantId}`);
+  }
+
   try {
-    const restaurantId = Buffer.from(state, 'base64').toString('utf8');
-    const result = await handleEmbeddedSignupCallback(code, restaurantId);
+    const result = await handleEmbeddedSignupCallback(code, restaurantId, {
+      metaSessionEvent,
+      selectedPhoneNumberId,
+    });
     logger.info(`Signup complete: WABA=${result.wabaId}, Phone=${result.phoneNumberId}`);
     res.redirect(`${process.env.FRONTEND_URL}/onboard/success?restaurantId=${restaurantId}`);
   } catch (err) {
@@ -58,6 +90,15 @@ router.get('/link/:restaurantId', async (req, res, next) => {
     console.log('======================================');
 
     const stateParam = Buffer.from(req.params.restaurantId).toString('base64');
+
+    // Register state so callback can validate it
+    pendingStates.set(stateParam, {
+      restaurantId: req.params.restaurantId,
+      createdAt: Date.now(),
+      // These will be populated by the frontend JS SDK session event before redirect
+      metaSessionEvent: null,
+      selectedPhoneNumberId: null,
+    });
 
     // IMPORTANT: client_id MUST be META_APP_ID (768041869261097)
     // NOT MAIN_WABA_ID (1829228161089972)
@@ -87,6 +128,26 @@ router.get('/link/:restaurantId', async (req, res, next) => {
 });
 
 /**
+ * POST /api/embedded-signup/session-event
+ * Called by frontend after Meta JS SDK fires the session event,
+ * before the OAuth redirect happens. Stores metaSessionEvent and selectedPhoneNumberId.
+ */
+router.post('/session-event', async (req, res) => {
+  const { state, metaSessionEvent, selectedPhoneNumberId } = req.body;
+  if (!state || !metaSessionEvent) {
+    return res.status(400).json({ error: 'state and metaSessionEvent are required' });
+  }
+  const session = pendingStates.get(state);
+  if (!session) {
+    return res.status(400).json({ error: 'Unknown or expired state' });
+  }
+  session.metaSessionEvent = metaSessionEvent;
+  session.selectedPhoneNumberId = selectedPhoneNumberId || null;
+  logger.info(`Session event stored for state ${state}: ${metaSessionEvent}, phone: ${selectedPhoneNumberId}`);
+  res.json({ ok: true });
+});
+
+/**
  * GET /api/embedded-signup/status/:restaurantId
  * PUBLIC - Get WhatsApp config status
  */
@@ -112,9 +173,9 @@ router.get('/status/:restaurantId', async (req, res, next) => {
  */
 router.post('/manual-activate/:restaurantId', authenticate, requireAdmin, async (req, res, next) => {
   try {
-    const { wabaId, phoneNumberId, accessToken } = req.body;
-    if (!wabaId || !phoneNumberId) {
-      return res.status(400).json({ error: 'wabaId and phoneNumberId are required' });
+    const { wabaId, phoneNumberId, accessToken, signupMode } = req.body;
+    if (!wabaId || !phoneNumberId || !accessToken) {
+      return res.status(400).json({ error: 'wabaId, phoneNumberId, and accessToken are required' });
     }
 
     const restaurant = await Restaurant.findById(req.params.restaurantId);
@@ -124,6 +185,7 @@ router.post('/manual-activate/:restaurantId', authenticate, requireAdmin, async 
       wabaId,
       phoneNumberId,
       accessToken,
+      signupMode: signupMode || 'cloud_api',
     });
 
     res.json({

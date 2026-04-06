@@ -136,7 +136,7 @@ router.post('/broadcast', async (req, res, next) => {
     let sent = 0;
     for (const owner of owners) {
       try {
-        await sendFromMainBot(owner.whatsappNumber, `📢 *FoodieHub Update*\n\n${message}`);
+        await sendFromMainBot(owner.whatsappNumber, `📢 *ChatServe Update*\n\n${message}`);
         sent++;
       } catch { /* continue */ }
     }

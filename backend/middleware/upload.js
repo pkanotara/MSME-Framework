@@ -6,7 +6,7 @@ const createStorage = (folder) =>
   new CloudinaryStorage({
     cloudinary,
     params: {
-      folder: `foodiehub/${folder}`,
+      folder: `ChatServe/${folder}`,
       allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
       transformation: [{ width: 1200, height: 1200, crop: 'limit', quality: 'auto' }],
     },

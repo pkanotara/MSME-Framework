@@ -20,7 +20,7 @@ const seed = async () => {
   if (!existingAdmin) {
     await Admin.create({
       name: process.env.SEED_ADMIN_NAME || 'Platform Admin',
-      email: process.env.SEED_ADMIN_EMAIL || 'admin@foodiehub.com',
+      email: process.env.SEED_ADMIN_EMAIL || 'admin@ChatServe.com',
       password: process.env.SEED_ADMIN_PASSWORD || 'Admin@1234!',
       role: 'super_admin',
     });

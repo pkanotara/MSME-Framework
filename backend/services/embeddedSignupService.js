@@ -7,14 +7,49 @@ const { ActivityLog } = require('../models/Logs');
 const logger = require('../utils/logger');
 
 const GRAPH_BASE = `https://graph.facebook.com/${process.env.META_GRAPH_API_VERSION || 'v19.0'}`;
+const COEXISTENCE_SESSION_EVENT = 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING';
+const COEXISTENCE_EXTRA_WEBHOOKS = ['history', 'smb_app_state_sync', 'smb_message_echoes'];
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+const failSetup = async (waConfig, step, err) => {
+  const metaCode = err?.response?.data?.error?.code?.toString() || null;
+  const msg = err?.response?.data?.error?.message || err?.message || String(err);
+  waConfig.signupStatus = 'failed';
+  waConfig.lastSetupStep = step;
+  waConfig.lastSetupError = msg;
+  waConfig.lastMetaErrorCode = metaCode;
+  waConfig.retryCount = (waConfig.retryCount || 0) + 1;
+  waConfig.errorAt = new Date();
+  await waConfig.save();
+  logger.error(`❌ [${step}] ${msg}${metaCode ? ` (Meta code: ${metaCode})` : ''}`);
+  throw new Error(`[${step}] ${msg}`);
+};
+
+// ── Main callback handler ─────────────────────────────────────────────────────
 
 /**
- * Handle Meta Embedded Signup OAuth callback
- * This is called when restaurant owner completes Facebook login + phone verification
- * It automatically gets WABA ID, Phone Number ID, and Access Token
+ * Handle Meta Embedded Signup OAuth callback.
+ * @param {string} code  - OAuth authorization code from Meta
+ * @param {string} restaurantId
+ * @param {object} sessionMeta - { metaSessionEvent, selectedPhoneNumberId } from state/session
  */
-const handleEmbeddedSignupCallback = async (code, restaurantId) => {
+const handleEmbeddedSignupCallback = async (code, restaurantId, sessionMeta = {}) => {
   logger.info(`=== Embedded Signup START for restaurant: ${restaurantId} ===`);
+
+  // ── Step 0: Load & validate config ─────────────────────────────────────────
+  const waConfig = await WhatsAppConfig.findOne({ restaurant: restaurantId }).select('+accessToken');
+  if (!waConfig) throw new Error('WhatsApp config not found for this restaurant');
+
+  if (waConfig.signupStatus === 'configured') {
+    logger.warn(`Signup already configured for restaurant ${restaurantId} — skipping duplicate callback`);
+    return {
+      wabaId: waConfig.wabaId,
+      phoneNumberId: waConfig.phoneNumberId,
+      businessAccountId: waConfig.businessAccountId,
+      phoneDisplayNumber: waConfig.targetBusinessNumber,
+    };
+  }
 
   // ── Step 1: Exchange code for access token ──────────────────────────────────
   logger.info('Step 1: Exchanging authorization code for token...');
@@ -31,10 +66,11 @@ const handleEmbeddedSignupCallback = async (code, restaurantId) => {
     shortLivedToken = tokenRes.data.access_token;
     logger.info('✅ Step 1: Short-lived token obtained');
   } catch (err) {
-    const msg = err.response?.data?.error?.message || err.message;
-    logger.error('❌ Step 1 FAILED:', err.response?.data || err.message);
-    throw new Error(`Token exchange failed: ${msg}`);
+    await failSetup(waConfig, 'token_exchange', err);
   }
+
+  waConfig.signupStatus = 'oauth_completed';
+  await waConfig.save();
 
   // ── Step 2: Exchange for long-lived token ───────────────────────────────────
   logger.info('Step 2: Getting long-lived token...');
@@ -46,7 +82,7 @@ const handleEmbeddedSignupCallback = async (code, restaurantId) => {
     logger.warn('⚠️ Step 2: Using short-lived token:', err.message);
   }
 
-  // ── Step 3: Get WABA ID using multiple methods ──────────────────────────────
+  // ── Step 3: Resolve WABA ID ─────────────────────────────────────────────────
   logger.info('Step 3: Finding WhatsApp Business Account...');
   let wabaId = null;
   let businessAccountId = null;
@@ -111,15 +147,15 @@ const handleEmbeddedSignupCallback = async (code, restaurantId) => {
     }
   }
 
-  // Fallback: use platform WABA
   if (!wabaId) {
-    logger.warn('⚠️ Could not find WABA from OAuth. Using platform WABA as fallback.');
-    wabaId = process.env.MAIN_WABA_ID;
+    await failSetup(waConfig, 'waba_resolution', new Error(
+      'Could not resolve WABA ID from OAuth token. No fallback allowed — please retry signup.'
+    ));
   }
 
   logger.info(`Using WABA ID: ${wabaId}`);
 
-  // ── Step 4: Get Phone Numbers under this WABA ───────────────────────────────
+  // ── Step 4: Resolve exact Phone Number ID ───────────────────────────────────
   logger.info('Step 4: Fetching phone numbers...');
   let phoneNumberId = null;
   let phoneDisplayNumber = null;
@@ -128,88 +164,146 @@ const handleEmbeddedSignupCallback = async (code, restaurantId) => {
     const res = await axios.get(`${GRAPH_BASE}/${wabaId}/phone_numbers`, {
       params: {
         access_token: accessToken,
-        fields: 'id,display_phone_number,verified_name,code_verification_status',
+        fields: 'id,display_phone_number,verified_name,code_verification_status,is_on_biz_app,platform_type',
       },
     });
     const phones = res.data.data || [];
     logger.info(`Found ${phones.length} phone number(s):`);
-    phones.forEach(p => logger.info(`  - ${p.display_phone_number} (${p.id}) status: ${p.code_verification_status}`));
+    phones.forEach(p =>
+      logger.info(`  - ${p.display_phone_number} (${p.id}) status: ${p.code_verification_status} biz_app: ${p.is_on_biz_app} platform: ${p.platform_type}`)
+    );
 
-    if (phones.length > 0) {
-      phoneNumberId = phones[0].id;
-      phoneDisplayNumber = phones[0].display_phone_number;
-      logger.info(`✅ Using Phone Number ID: ${phoneNumberId} (${phoneDisplayNumber})`);
+    // Prefer the exact phone number ID passed from the session/state
+    const { selectedPhoneNumberId } = sessionMeta;
+    let matched = selectedPhoneNumberId
+      ? phones.find(p => p.id === selectedPhoneNumberId)
+      : null;
+
+    if (!matched && phones.length === 1) {
+      matched = phones[0];
+      logger.info('Only one phone number found — using it directly');
     }
+
+    if (!matched) {
+      await failSetup(waConfig, 'phone_resolution', new Error(
+        phones.length === 0
+          ? 'No phone numbers found under this WABA.'
+          : `Multiple phone numbers found but no selectedPhoneNumberId in session to disambiguate. ` +
+            `IDs: ${phones.map(p => p.id).join(', ')}`
+      ));
+    }
+
+    phoneNumberId = matched.id;
+    phoneDisplayNumber = matched.display_phone_number;
+    logger.info(`✅ Using Phone Number ID: ${phoneNumberId} (${phoneDisplayNumber})`);
   } catch (err) {
-    logger.error('❌ Phone numbers fetch failed:', err.response?.data || err.message);
-    // Fallback to platform number
-    phoneNumberId = process.env.MAIN_PHONE_NUMBER_ID;
-    logger.warn(`⚠️ Using platform Phone Number ID as fallback: ${phoneNumberId}`);
+    if (err.message.startsWith('[phone_resolution]') || err.message.startsWith('[')) throw err;
+    await failSetup(waConfig, 'phone_fetch', err);
   }
 
-  // ── Step 5: Save to database ────────────────────────────────────────────────
-  logger.info('Step 5: Saving to database...');
-  const waConfig = await WhatsAppConfig.findOne({ restaurant: restaurantId });
-  if (!waConfig) throw new Error('WhatsApp config not found for this restaurant');
+  // ── Step 5: Determine signup mode ───────────────────────────────────────────
+  const metaSessionEvent = sessionMeta.metaSessionEvent || null;
+  const signupMode = metaSessionEvent === COEXISTENCE_SESSION_EVENT ? 'coexistence' : 'cloud_api';
+  logger.info(`Signup mode: ${signupMode} (event: ${metaSessionEvent})`);
 
+  // ── Step 6: Save resolved assets ────────────────────────────────────────────
+  logger.info('Step 6: Saving to database...');
   waConfig.wabaId = wabaId;
+  waConfig.selectedWabaId = wabaId;
   waConfig.phoneNumberId = phoneNumberId;
+  waConfig.selectedPhoneNumberId = phoneNumberId;
   waConfig.businessAccountId = businessAccountId;
   waConfig.accessToken = accessToken;
-  waConfig.signupStatus = 'signup_completed';
+  waConfig.signupMode = signupMode;
+  waConfig.metaSessionEvent = metaSessionEvent;
+  waConfig.signupStatus = 'assets_resolved';
   waConfig.signupCompletedAt = new Date();
   await waConfig.save();
-  logger.info('✅ Step 5: Saved to database');
+  logger.info('✅ Step 6: Saved to database');
 
-  // ── Step 6: Run post-signup automation ──────────────────────────────────────
-  logger.info('Step 6: Running post-signup automation...');
+  // ── Step 7: Run post-signup automation ──────────────────────────────────────
+  logger.info('Step 7: Running post-signup automation...');
   await runPostSignupAutomation(restaurantId, waConfig, accessToken, wabaId);
 
   logger.info(`=== Embedded Signup COMPLETE ===`);
-  logger.info(`WABA ID: ${wabaId}`);
-  logger.info(`Phone Number ID: ${phoneNumberId}`);
-  logger.info(`Phone Number: ${phoneDisplayNumber}`);
+  logger.info(`WABA ID: ${wabaId}, Phone Number ID: ${phoneNumberId}, Phone: ${phoneDisplayNumber}`);
 
   return { wabaId, phoneNumberId, businessAccountId, phoneDisplayNumber };
 };
 
+// ── Post-signup automation ────────────────────────────────────────────────────
+
 /**
- * Post-signup automation — runs automatically after Meta signup
- * Configures: webhook, phone registration, WhatsApp Business profile, bot activation
+ * Idempotent post-signup automation.
+ * Safe to call multiple times — each step is guarded.
  */
 const runPostSignupAutomation = async (restaurantId, waConfig, accessToken, wabaId) => {
   logger.info(`=== Post-Signup Automation START ===`);
+
+  if (waConfig.signupStatus === 'configured') {
+    logger.info('Already configured — skipping automation');
+    return;
+  }
 
   const restaurant = await Restaurant.findById(restaurantId).populate('owner');
   if (!restaurant) throw new Error('Restaurant not found');
 
   const phoneNumberId = waConfig.phoneNumberId;
+  const isCoexistence = waConfig.signupMode === 'coexistence';
 
   // ── 1. Subscribe Webhook ────────────────────────────────────────────────────
-  try {
-    await subscribeWebhook(wabaId, accessToken);
-    waConfig.webhookSubscribed = true;
-    logger.info('✅ Webhook subscribed');
-  } catch (err) {
-    logger.warn(`⚠️ Webhook subscribe failed (non-fatal): ${err.message}`);
+  if (!waConfig.webhookSubscribed) {
+    try {
+      await subscribeWebhook(wabaId, accessToken);
+      waConfig.webhookSubscribed = true;
+      logger.info('✅ Webhook subscribed');
+
+      if (isCoexistence) {
+        await subscribeCoexistenceWebhooks(wabaId, accessToken);
+      }
+    } catch (err) {
+      logger.warn(`⚠️ Webhook subscribe failed (non-fatal): ${err.message}`);
+    }
   }
 
-  // ── 2. Register Phone Number with Cloud API ─────────────────────────────────
-  if (phoneNumberId && phoneNumberId !== process.env.MAIN_PHONE_NUMBER_ID) {
+  // ── 2. Register Phone Number (cloud_api only) ───────────────────────────────
+  if (!isCoexistence) {
+    const pin = process.env.WA_REGISTRATION_PIN;
+    if (!pin || pin.length !== 6) {
+      await failSetup(waConfig, 'phone_registration', new Error(
+        'WA_REGISTRATION_PIN env var is missing or not 6 digits. Cannot register phone number.'
+      ));
+    }
     try {
       await axios.post(
         `${GRAPH_BASE}/${phoneNumberId}/register`,
-        { messaging_product: 'whatsapp', pin: '000000' },
+        { messaging_product: 'whatsapp', pin },
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       logger.info('✅ Phone number registered with Cloud API');
     } catch (err) {
-      logger.warn(`⚠️ Phone registration (may already be registered): ${err.response?.data?.error?.message || err.message}`);
+      const metaMsg = err.response?.data?.error?.message || err.message;
+      const metaCode = err.response?.data?.error?.code;
+      // Code 2388023 = already registered — treat as success
+      if (metaCode === 2388023 || metaMsg.includes('already registered')) {
+        logger.info('ℹ️ Phone already registered — continuing');
+      } else {
+        logger.warn(`⚠️ Phone registration failed: ${metaMsg} (code: ${metaCode})`);
+        waConfig.lastSetupStep = 'phone_registration';
+        waConfig.lastSetupError = metaMsg;
+        waConfig.lastMetaErrorCode = metaCode?.toString();
+        // Non-fatal: log but continue so profile/bot can still be set up
+      }
+    }
+  } else {
+    // Coexistence: skip registration, start sync within 24h
+    if (!waConfig.coexistenceSyncStartedAt) {
+      waConfig.coexistenceSyncStartedAt = new Date();
+      logger.info('✅ Coexistence sync window started (24h deadline)');
     }
   }
 
   // ── 3. Configure WhatsApp Business Profile ──────────────────────────────────
-  // Automatically sets: business name, description, address, email, logo, hours
   try {
     logger.info('Configuring WhatsApp Business Profile...');
     const profileResults = await setupFullBusinessProfile(restaurant, phoneNumberId, accessToken);
@@ -222,12 +316,15 @@ const runPostSignupAutomation = async (restaurantId, waConfig, accessToken, waba
   }
 
   // ── 4. Enable Bot ───────────────────────────────────────────────────────────
-  waConfig.botEnabled = true;
-  waConfig.botInitializedAt = new Date();
+  if (!waConfig.botEnabled) {
+    waConfig.botEnabled = true;
+    waConfig.botInitializedAt = new Date();
+    logger.info('✅ Bot enabled');
+  }
+
   waConfig.signupStatus = 'configured';
   waConfig.configuredAt = new Date();
   await waConfig.save();
-  logger.info('✅ Bot enabled');
 
   // ── 5. Activate Restaurant ──────────────────────────────────────────────────
   await Restaurant.findByIdAndUpdate(restaurantId, { status: 'active' });
@@ -239,7 +336,7 @@ const runPostSignupAutomation = async (restaurantId, waConfig, accessToken, waba
     if (restaurant.owner?.whatsappNumber) {
       await sendFromMainBot(
         restaurant.owner.whatsappNumber,
-        `🎉 *${restaurant.name} is now LIVE on FoodieHub!*\n\n` +
+        `🎉 *${restaurant.name} is now LIVE on ChatServe!*\n\n` +
         `✅ WhatsApp Business number connected: ${waConfig.targetBusinessNumber}\n` +
         `✅ Business profile auto-configured\n` +
         `✅ Ordering chatbot activated\n` +
@@ -255,46 +352,58 @@ const runPostSignupAutomation = async (restaurantId, waConfig, accessToken, waba
   // ── 7. Log Activity ─────────────────────────────────────────────────────────
   await ActivityLog.create({
     actorRole: 'system',
-    actorName: 'FoodieHub Platform',
+    actorName: 'ChatServe Platform',
     restaurant: restaurantId,
     action: 'embedded_signup_completed',
-    details: { wabaId, phoneNumberId, profileConfigured: true },
+    details: { wabaId, phoneNumberId, signupMode: waConfig.signupMode, profileConfigured: true },
   }).catch(() => {});
 
   logger.info(`=== Post-Signup Automation COMPLETE for: ${restaurant.name} ===`);
 };
 
-/**
- * Manual activation (admin override)
- * Same as Embedded Signup but with manually provided credentials
- * Also auto-configures WhatsApp Business profile
- */
-const manualActivation = async (restaurantId, { wabaId, phoneNumberId, accessToken }) => {
-  logger.info(`Manual activation for restaurant: ${restaurantId}`);
-  logger.info(`WABA: ${wabaId}, Phone: ${phoneNumberId}`);
+// ── Coexistence extra webhooks ────────────────────────────────────────────────
 
-  const waConfig = await WhatsAppConfig.findOne({ restaurant: restaurantId });
+const subscribeCoexistenceWebhooks = async (wabaId, accessToken) => {
+  try {
+    await axios.post(
+      `${GRAPH_BASE}/${wabaId}/subscribed_apps`,
+      { subscribed_fields: COEXISTENCE_EXTRA_WEBHOOKS },
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    logger.info(`✅ Coexistence extra webhooks subscribed: ${COEXISTENCE_EXTRA_WEBHOOKS.join(', ')}`);
+  } catch (err) {
+    logger.warn(`⚠️ Coexistence webhook subscription failed: ${err.response?.data?.error?.message || err.message}`);
+  }
+};
+
+// ── Manual activation (admin override) ───────────────────────────────────────
+
+const manualActivation = async (restaurantId, { wabaId, phoneNumberId, accessToken, signupMode = 'cloud_api' }) => {
+  logger.info(`Manual activation for restaurant: ${restaurantId}`);
+  logger.info(`WABA: ${wabaId}, Phone: ${phoneNumberId}, Mode: ${signupMode}`);
+
+  const waConfig = await WhatsAppConfig.findOne({ restaurant: restaurantId }).select('+accessToken');
   if (!waConfig) throw new Error('WhatsApp config not found');
 
-  const token = accessToken || process.env.MAIN_ACCESS_TOKEN;
+  if (!accessToken) throw new Error('accessToken is required for manual activation');
 
   waConfig.wabaId = wabaId;
+  waConfig.selectedWabaId = wabaId;
   waConfig.phoneNumberId = phoneNumberId;
-  waConfig.accessToken = token;
-  waConfig.signupStatus = 'signup_completed';
+  waConfig.selectedPhoneNumberId = phoneNumberId;
+  waConfig.accessToken = accessToken;
+  waConfig.signupMode = signupMode;
+  waConfig.signupStatus = 'assets_resolved';
   waConfig.signupCompletedAt = new Date();
   await waConfig.save();
 
-  // Run full automation including WhatsApp Business profile setup
-  await runPostSignupAutomation(restaurantId, waConfig, token, wabaId);
+  await runPostSignupAutomation(restaurantId, waConfig, accessToken, wabaId);
 
   return await WhatsAppConfig.findOne({ restaurant: restaurantId });
 };
 
-/**
- * Refresh WhatsApp Business Profile
- * Re-syncs restaurant details to WhatsApp Business Account
- */
+// ── Refresh business profile ──────────────────────────────────────────────────
+
 const refreshBusinessProfile = async (restaurantId) => {
   const restaurant = await Restaurant.findById(restaurantId);
   const waConfig = await WhatsAppConfig.findOne({ restaurant: restaurantId }).select('+accessToken');
@@ -303,8 +412,11 @@ const refreshBusinessProfile = async (restaurantId) => {
     throw new Error('WhatsApp not configured for this restaurant');
   }
 
-  const token = waConfig.accessToken || process.env.MAIN_ACCESS_TOKEN;
-  return await setupFullBusinessProfile(restaurant, waConfig.phoneNumberId, token);
+  if (!waConfig.accessToken) {
+    throw new Error('No access token stored for this restaurant — cannot refresh profile');
+  }
+
+  return await setupFullBusinessProfile(restaurant, waConfig.phoneNumberId, waConfig.accessToken);
 };
 
 module.exports = {

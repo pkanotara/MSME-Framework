@@ -1,4 +1,4 @@
-# FoodieHub Onboarding Engine
+# ChatServe Onboarding Engine
 
 A production-ready multi-tenant WhatsApp Business onboarding platform for restaurant owners. Restaurant owners message your main WhatsApp bot, provide their business details, complete Meta Embedded Signup, and the system auto-configures their WhatsApp chatbot.
 
@@ -44,7 +44,7 @@ Restaurant Owner Dashboard activated
 
 ```bash
 git clone <repo>
-cd foodiehub
+cd ChatServe
 
 # Backend
 cd backend && npm install
@@ -96,7 +96,7 @@ ngrok http 5000
 ## Folder Structure
 
 ```
-foodiehub/
+ChatServe/
 ├── backend/
 │   ├── config/          # DB, Redis, Cloudinary config
 │   ├── controllers/     # Route handlers
