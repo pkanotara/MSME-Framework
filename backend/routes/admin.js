@@ -8,6 +8,7 @@ const Order = require('../models/Order');
 const { BroadcastLog, ActivityLog } = require('../models/Logs');
 const { paginationMeta } = require('../utils/helpers');
 const { sendFromMainBot } = require('../services/whatsappService');
+const { sendPasswordResetEmail } = require('../services/emailService');
 
 router.use(authenticate, requireAdmin);
 
@@ -258,6 +259,47 @@ router.post('/restaurants/:id/test-send', async (req, res, next) => {
     await sendTextMessage(waConfig.phoneNumberId, token, to, message);
 
     res.json({ message: `Test message sent to ${to} from restaurant's WhatsApp number` });
+  } catch (err) { next(err); }
+});
+
+// ─── Reset Restaurant Owner Password ────────────────────────────────────────
+router.post('/restaurants/:ownerId/reset-password', async (req, res, next) => {
+  try {
+    const { newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+
+    const owner = await RestaurantOwner.findById(req.params.ownerId).populate('restaurant', 'name');
+    if (!owner) return res.status(404).json({ error: 'Restaurant owner not found' });
+
+    // Invalidate existing sessions by clearing the refresh token
+    owner.password = newPassword;
+    owner.refreshToken = null;
+    await owner.save();
+
+    const restaurantName = owner.restaurant?.name || 'Unknown Restaurant';
+
+    await ActivityLog.create({
+      actor: req.user.id,
+      actorRole: 'super_admin',
+      actorName: req.user.email || 'Admin',
+      action: 'restaurant_owner_password_reset',
+      restaurant: owner.restaurant?._id || null,
+      ipAddress: req.ip,
+    });
+
+    // Send email notification (non-fatal if SMTP not configured)
+    await sendPasswordResetEmail({
+      ownerName: owner.name,
+      ownerEmail: owner.email,
+      restaurantName,
+      newPassword,
+      adminName: req.user.email || 'Super Admin',
+    });
+
+    res.json({ message: `Password reset successfully for ${owner.name}` });
   } catch (err) { next(err); }
 });
 
