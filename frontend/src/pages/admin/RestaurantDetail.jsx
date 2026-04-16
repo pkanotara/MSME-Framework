@@ -2,8 +2,9 @@ import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import api from '../../services/api'
-import { ArrowLeft, Store, Wifi, ShoppingBag, CheckCircle2, XCircle, Wrench, Send, Loader2, Copy, Check } from 'lucide-react'
+import { ArrowLeft, Store, Wifi, ShoppingBag, CheckCircle2, XCircle, Wrench, Send, Loader2, Copy, Check, KeyRound } from 'lucide-react'
 import toast from 'react-hot-toast'
+import PasswordResetModal from '../../components/PasswordResetModal'
 
 export default function AdminRestaurantDetail() {
   const { id } = useParams()
@@ -13,6 +14,7 @@ export default function AdminRestaurantDetail() {
   const [testForm, setTestForm] = useState({ to: '', message: '' })
   const [showTestForm, setShowTestForm] = useState(false)
   const [copiedId, setCopiedId] = useState(false)
+  const [showPasswordReset, setShowPasswordReset] = useState(false)
 
   const { data: restaurant, isLoading } = useQuery({
     queryKey: ['admin-restaurant', id],
@@ -243,9 +245,21 @@ export default function AdminRestaurantDetail() {
             <button onClick={() => setShowActivateForm(true)} className="btn-secondary w-full justify-center text-xs">
               <Wrench size={14} /> Configure WhatsApp Manually
             </button>
+            <button onClick={() => setShowPasswordReset(true)} className="btn-secondary w-full justify-center text-xs">
+              <KeyRound size={14} /> Reset Owner Password
+            </button>
           </div>
         </div>
       </div>
+
+      {showPasswordReset && restaurant.owner && (
+        <PasswordResetModal
+          ownerId={restaurant.owner._id}
+          ownerName={restaurant.owner.name}
+          ownerEmail={restaurant.owner.email}
+          onClose={() => setShowPasswordReset(false)}
+        />
+      )}
 
       {/* Recent Orders */}
       <div className="card p-6">
